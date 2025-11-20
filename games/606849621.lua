@@ -835,26 +835,71 @@ run(function()
 end)
 
 run(function()
-	local VehicleNitro =
-		minigamesCategory:CreateModule({
-			Name = 'InfiniteNitro',
-			Function = function(callback)
-				if callback then
-					-- Mendapatkan objek nitro dari game
-					local nitro = getupvalue(require(game:GetService("ReplicatedStorage").Game.Vehicle.NitroSystem).new, 8)
-					if nitro then
-						repeat
-							task.wait()
-							-- Memaksa nitro untuk selalu terisi penuh
-							nitro.NitroLastMax = 250
-							nitro.Nitro = math.random(10, 249) -- sedikit variasi
-							nitro.NitroForceUIUpdate = true
-						until not VehicleNitro.Enabled
+	InfiniteNitro = vape.minigamesCategory:CreateModule({
+		Name = 'Infinite Nitro',
+		Function = function(callback)
+			if callback then
+				-- Search for StartNitro GC function and extract nitro upvalue
+				local startnitro, nitro
+				for i, v in next, getgc() do
+					if type(v) == "function" and islclosure(v) and getinfo(v).name == "StartNitro" then
+						startnitro = v
+						nitro = getupvalue(v, 8)
+						break
 					end
 				end
-			end,
-			Tooltip = 'Memberikan nitro tak terbatas untuk kendaraan Anda.'
-		})
+				if not nitro then return end
+				task.spawn(function()
+					repeat
+						task.wait()
+						nitro.NitroLastMax = 250
+						nitro.Nitro = 249
+						nitro.NitroForceUIUpdate = true
+					until not InfiniteNitro.Enabled
+				end)
+			end
+		end,
+		Tooltip = 'Provides infinite nitro by constantly refilling the nitro bar'
+	})
+
+	EngineSpeed = vape.minigamesCategory:CreateModule({
+		Name = 'Engine Speed',
+		Function = function(callback)
+			if callback then
+				-- Hook into vehicle packet updates, adapt garage engine speed
+				local originalStats = {}
+				local function updateToOriginal()
+					local gvp = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils).GetLocalVehiclePacket()
+					if gvp and originalStats.GarageEngineSpeed then
+						gvp.GarageEngineSpeed = originalStats.GarageEngineSpeed
+					end
+				end
+				task.spawn(function()
+					repeat
+						task.wait(0.1)
+						local gvp = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils).GetLocalVehiclePacket()
+						if gvp and gvp.Type == "Chassis" then
+							if not originalStats.GarageEngineSpeed then
+								originalStats.GarageEngineSpeed = gvp.GarageEngineSpeed
+							end
+							gvp.GarageEngineSpeed = EngineSpeedSlider.Value
+						end
+					until not EngineSpeed.Enabled
+					updateToOriginal()
+				end)
+			end
+		end,
+		Tooltip = 'Modifies the engine speed of the current vehicle'
+	})
+
+	EngineSpeedSlider = EngineSpeed:CreateSlider({
+		Name = 'Speed Multiplier',
+		Min = 1,
+		Max = 200,
+		Default = 1,
+		Suffix = 'x',
+		Function = function() end
+	})
 end)
 
 -- Modul Speed Changer
