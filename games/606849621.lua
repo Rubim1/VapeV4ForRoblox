@@ -9,9 +9,33 @@ local isfile = isfile or function(file)
 end
 local function downloadFile(path, func)
 	if not isfile(path) then
-		local suc, res = pcall(function() return game:HttpGet('https://raw.githubusercontent.com/rubim1/VapeV4ForRoblox/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true) end)
-		if not suc or res == '404: Not Found' then error(res) end
-		if path:find('.lua') then res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res end
+		-- read commit (if available) and build URL
+		local commit
+		pcall(function() commit = readfile('newvape/profiles/commit.txt') end)
+		local subpath = select(1, path:gsub('newvape/', ''))
+		local url = 'https://raw.githubusercontent.com/rubim1/VapeV4ForRoblox/' .. (commit or 'main') .. '/' .. subpath
+
+		local suc, res = pcall(function() return game:HttpGet(url, true) end)
+
+		-- If initial attempt returned 404 and commit wasn't 'main', try fallback to 'main' branch
+		if (not suc or res == '404: Not Found') and commit and commit ~= 'main' then
+			local fallbackUrl = 'https://raw.githubusercontent.com/rubim1/VapeV4ForRoblox/main/' .. subpath
+			local suc2, res2 = pcall(function() return game:HttpGet(fallbackUrl, true) end)
+			if suc2 and res2 and res2 ~= '404: Not Found' then
+				suc = suc2
+				res = res2
+				url = fallbackUrl
+			end
+		end
+
+		if not suc or res == '404: Not Found' then
+			warn('downloadFile failed to fetch: ' .. url .. ' -> ' .. tostring(res))
+			error(res)
+		end
+
+		if path:find('.lua') then
+			res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n' .. res
+		end
 		writefile(path, res)
 	end
 	return (func or readfile)(path)
@@ -62,6 +86,7 @@ local originalTankEngineConstant
 local jb = {}
 local InfNitro = {Enabled = false}
 local LazerGodmode = {Enabled = false}
+local minigamesCategory = (vape.Categories and (vape.Categories.Minigames or vape.Categories.Utility)) or vape.Categories.Utility
 
 local function getVehicle(ent)
 	if ent.Player then
@@ -811,7 +836,7 @@ end)
 
 run(function()
 	local VehicleNitro =
-		vape.MinigamesCategory:CreateModule({
+		minigamesCategory:CreateModule({
 			Name = 'InfiniteNitro',
 			Function = function(callback)
 				if callback then
@@ -833,7 +858,11 @@ run(function()
 end)
 
 -- Modul Speed Changer
-local SpeedChanger = vape.MinigamesCategory:CreateModule({
+local CarEnabled, CarSpeed, SuspensionEnabled, CarSuspensionHeight, TurnSpeedEnabled, CarTurnSpeed
+local HeliEnabled, HeliSpeed, HeliVerticalSpeed, HeliTurnSpeed
+local MotorbikeEnabled, MotorbikeSpeed, TankEnabled, TankSpeed
+local VoltEnabled, VoltSpeed
+local SpeedChanger = minigamesCategory:CreateModule({
 	Name = 'SpeedChanger',
 	Function = function(callback)
         if callback then
@@ -923,8 +952,8 @@ local SpeedChanger = vape.MinigamesCategory:CreateModule({
 -- --- ELEMEN UI UNTUK SPEED CHANGER ---
 
 -- Car
-local CarEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Speed', Default = false })
-local CarSpeed = SpeedChanger:CreateSlider({
+CarEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Speed', Default = false })
+CarSpeed = SpeedChanger:CreateSlider({
     Name = 'Car Speed',
     Min = 1,
     Max = 200,
@@ -932,8 +961,8 @@ local CarSpeed = SpeedChanger:CreateSlider({
     Function = function() end, -- Fungsi akan di-handle oleh loop utama
     Suffix = 'x'
 })
-local SuspensionEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Suspension', Default = false })
-local CarSuspensionHeight = SpeedChanger:CreateSlider({
+SuspensionEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Suspension', Default = false })
+CarSuspensionHeight = SpeedChanger:CreateSlider({
     Name = 'Car Suspension Height',
     Min = 1,
     Max = 200,
@@ -941,8 +970,8 @@ local CarSuspensionHeight = SpeedChanger:CreateSlider({
     Function = function() end,
     Suffix = ''
 })
-local TurnSpeedEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Turn Speed', Default = false })
-local CarTurnSpeed = SpeedChanger:CreateSlider({
+TurnSpeedEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Turn Speed', Default = false })
+CarTurnSpeed = SpeedChanger:CreateSlider({
     Name = 'Car Turn Speed',
     Min = 1,
     Max = 5,
@@ -953,8 +982,8 @@ local CarTurnSpeed = SpeedChanger:CreateSlider({
 })
 
 -- Helicopter
-local HeliEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Helicopter Speed', Default = false })
-local HeliSpeed = SpeedChanger:CreateSlider({
+HeliEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Helicopter Speed', Default = false })
+HeliSpeed = SpeedChanger:CreateSlider({
     Name = 'Heli Forward/Backward Speed',
     Min = 0,
     Max = 500,
@@ -962,7 +991,7 @@ local HeliSpeed = SpeedChanger:CreateSlider({
     Function = function() end,
     Suffix = '%'
 })
-local HeliVerticalSpeed = SpeedChanger:CreateSlider({
+HeliVerticalSpeed = SpeedChanger:CreateSlider({
     Name = 'Heli Vertical Speed',
     Min = 0,
     Max = 300,
@@ -970,7 +999,7 @@ local HeliVerticalSpeed = SpeedChanger:CreateSlider({
     Function = function() end,
     Suffix = '%'
 })
-local HeliTurnSpeed = SpeedChanger:CreateSlider({
+HeliTurnSpeed = SpeedChanger:CreateSlider({
     Name = 'Heli Turn Speed',
     Min = 0,
     Max = 500,
@@ -980,8 +1009,8 @@ local HeliTurnSpeed = SpeedChanger:CreateSlider({
 })
 
 -- Motorbike
-local MotorbikeEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Motorbike Speed', Default = false })
-local MotorbikeSpeed = SpeedChanger:CreateSlider({
+MotorbikeEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Motorbike Speed', Default = false })
+MotorbikeSpeed = SpeedChanger:CreateSlider({
     Name = 'Motorbike Speed',
     Min = 0,
     Max = 100,
@@ -991,8 +1020,8 @@ local MotorbikeSpeed = SpeedChanger:CreateSlider({
 })
 
 -- Tank
-local TankEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Tank Speed', Default = false })
-local TankSpeed = SpeedChanger:CreateSlider({
+TankEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Tank Speed', Default = false })
+TankSpeed = SpeedChanger:CreateSlider({
     Name = 'Tank Engine Speed',
     Min = 1,
     Max = 500,
@@ -1002,8 +1031,8 @@ local TankSpeed = SpeedChanger:CreateSlider({
 })
 
 -- Volt
-local VoltEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Volt Bike Speed', Default = false })
-local VoltSpeed = SpeedChanger:CreateSlider({
+VoltEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Volt Bike Speed', Default = false })
+VoltSpeed = SpeedChanger:CreateSlider({
     Name = 'Volt Speed Multiplier',
     Min = 0,
     Max = 25,
