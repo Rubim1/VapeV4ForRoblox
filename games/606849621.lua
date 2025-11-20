@@ -9,7 +9,7 @@ local isfile = isfile or function(file)
 end
 local function downloadFile(path, func)
 	if not isfile(path) then
-		local suc, res = pcall(function() return game:HttpGet('https://raw.githubusercontent.com/7GrandDadPGN/VapeV4ForRoblox/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true) end)
+		local suc, res = pcall(function() return game:HttpGet('https://raw.githubusercontent.com/rubim1/VapeV4ForRoblox/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true) end)
 		if not suc or res == '404: Not Found' then error(res) end
 		if path:find('.lua') then res = '--This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.\n'..res end
 		writefile(path, res)
@@ -31,6 +31,8 @@ local contextService = cloneref(game:GetService('ContextActionService'))
 
 local gameCamera = workspace.CurrentCamera
 local lplr = playersService.LocalPlayer
+local game, workspace, task = game, workspace, task
+local require, getupvalue, setconstant, hookfunction = require, getupvalue, setconstant, hookfunction
 
 local vape = shared.vape
 local entitylib = vape.Libraries.entity
@@ -39,7 +41,24 @@ local prediction = vape.Libraries.prediction
 local targetinfo = vape.Libraries.targetinfo
 local sessioninfo = vape.Libraries.sessioninfo
 local vm = loadstring(downloadFile('newvape/libraries/vm.lua'), 'vm')()
+local client = {}
+do
+	local ok, mod
 
+	ok, mod = pcall(function() return require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils) end)
+	client.vclasses = ok and (mod.Classes or {}) or {}
+
+	ok, mod = pcall(function() return require(game:GetService("ReplicatedStorage").Module.AlexChassis2) end)
+	client.alexchassis2 = ok and mod or nil
+
+	ok, mod = pcall(function() return require(game:GetService("ReplicatedStorage").Tank.TankBinder) end)
+	client.tankbinder = ok and (mod._constructor or nil) or nil
+end
+
+local originalHeliUpdate
+local originalVoltUpdate
+local originalMotorbikeSpeedConstant
+local originalTankEngineConstant
 local jb = {}
 local InfNitro = {Enabled = false}
 local LazerGodmode = {Enabled = false}
@@ -789,4 +808,204 @@ run(function()
 		Tooltip = 'Enables most doors to be walked through'
 	})
 end)
+
+local VehicleNitro = vape.MinigamesCategory:CreateModule({
+    Name = 'InfiniteNitro',
+    Function = function(callback)
+        if callback then
+            -- Mendapatkan objek nitro dari game
+            local nitro = getupvalue(require(game:GetService("ReplicatedStorage").Game.Vehicle.NitroSystem).new, 8)
+            if nitro then
+                repeat
+                    task.wait()
+                    -- Memaksa nitro untuk selalu terisi penuh
+                    nitro.NitroLastMax = 250
+                    nitro.Nitro = math.random(10, 249) -- Memberikan sedikit variasi agar tidak terlihat mencurigakan
+                    nitro.NitroForceUIUpdate = true
+                until not VehicleNitro.Enabled
+            end
+        end
+    end,
+    Tooltip = 'Memberikan nitro tak terbatas untuk kendaraan Anda.'
+})
+
+-- Modul Speed Changer
+local SpeedChanger = vape.MinigamesCategory:CreateModule({
+    Name = 'SpeedChanger',
+    Function = function(callback)
+        if callback then
+            -- --- HOOKING & SETCONSTANT (Diterapkan sekali saat diaktifkan) ---
+
+            -- Helicopter Speed
+            if HeliEnabled.Value then
+                originalHeliUpdate = client.vclasses.Heli.Update
+                client.vclasses.Heli.Update = function(self, ...)
+                    originalHeliUpdate(self, ...)
+                    -- Meningkatkan kecepatan gerak dan rotasi
+                    self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(HeliSpeed.Value / 10, HeliVerticalSpeed.Value / 10, HeliSpeed.Value / 10)
+                    self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * (HeliTurnSpeed.Value / 10)
+                end
+            end
+
+            -- Volt Bike Speed
+            if VoltEnabled.Value then
+                originalVoltUpdate = client.vclasses.Volt.Update
+                client.vclasses.Volt.Update = function(volt, ...)
+                    originalVoltUpdate(volt, ...)
+                    -- Meningkatkan gaya dorong (kecepatan)
+                    volt.Force.Force = volt.Force.Force * (1 + VoltSpeed.Value)
+                end
+            end
+
+            -- Motorbike Speed
+            if MotorbikeEnabled.Value then
+                -- Menyimpan konstanta asli
+                originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
+                -- Mengubah konstanta untuk meningkatkan kecepatan
+                setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + MotorbikeSpeed.Value)
+            end
+
+            -- Tank Speed
+            if TankEnabled.Value then
+                -- Menyimpan konstanta asli
+                originalTankEngineConstant = getconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20)
+                -- Mengubah konstanta untuk meningkatkan kecepatan mesin
+                setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, TankSpeed.Value)
+            end
+
+            -- --- LOOPING UPDATE (Berjalan terus-menerus saat modul aktif) ---
+            repeat
+                task.wait(0.1) -- Cek setiap 0.1 detik
+                local gvp = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils).GetLocalVehiclePacket()
+
+                -- Car Modifications (diperbarui secara terus-menerus)
+                if gvp and gvp.Type == "Chassis" then
+                    if CarEnabled.Value then
+                        gvp.GarageEngineSpeed = CarSpeed.Value
+                    end
+                    if SuspensionEnabled.Value then
+                        gvp.Height = CarSuspensionHeight.Value
+                    end
+                    if TurnSpeedEnabled.Value then
+                        gvp.TurnSpeed = CarTurnSpeed.Value
+                    end
+                end
+
+            until not SpeedChanger.Enabled
+
+            -- --- PEMULIHAN (Diterapkan saat modul dinonaktifkan) ---
+
+            -- Memulihkan fungsi dan konstanta asli
+            if originalHeliUpdate then
+                client.vclasses.Heli.Update = originalHeliUpdate
+                originalHeliUpdate = nil
+            end
+            if originalVoltUpdate then
+                client.vclasses.Volt.Update = originalVoltUpdate
+                originalVoltUpdate = nil
+            end
+            if originalMotorbikeSpeedConstant then
+                setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
+                originalMotorbikeSpeedConstant = nil
+            end
+            if originalTankEngineConstant then
+                setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, originalTankEngineConstant)
+                originalTankEngineConstant = nil
+            end
+        end
+    end,
+    Tooltip = 'Memungkinkan Anda untuk memodifikasi kecepatan, suspensi, dan belokan berbagai jenis kendaraan.'
+})
+
+-- --- ELEMEN UI UNTUK SPEED CHANGER ---
+
+-- Car
+local CarEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Speed', Default = false })
+local CarSpeed = SpeedChanger:CreateSlider({
+    Name = 'Car Speed',
+    Min = 1,
+    Max = 200,
+    Default = 10,
+    Function = function() end, -- Fungsi akan di-handle oleh loop utama
+    Suffix = 'x'
+})
+local SuspensionEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Suspension', Default = false })
+local CarSuspensionHeight = SpeedChanger:CreateSlider({
+    Name = 'Car Suspension Height',
+    Min = 1,
+    Max = 200,
+    Default = 10,
+    Function = function() end,
+    Suffix = ''
+})
+local TurnSpeedEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Turn Speed', Default = false })
+local CarTurnSpeed = SpeedChanger:CreateSlider({
+    Name = 'Car Turn Speed',
+    Min = 1,
+    Max = 5,
+    Default = 1,
+    Decimal = 1,
+    Function = function() end,
+    Suffix = 'x'
+})
+
+-- Helicopter
+local HeliEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Helicopter Speed', Default = false })
+local HeliSpeed = SpeedChanger:CreateSlider({
+    Name = 'Heli Forward/Backward Speed',
+    Min = 0,
+    Max = 500,
+    Default = 100,
+    Function = function() end,
+    Suffix = '%'
+})
+local HeliVerticalSpeed = SpeedChanger:CreateSlider({
+    Name = 'Heli Vertical Speed',
+    Min = 0,
+    Max = 300,
+    Default = 100,
+    Function = function() end,
+    Suffix = '%'
+})
+local HeliTurnSpeed = SpeedChanger:CreateSlider({
+    Name = 'Heli Turn Speed',
+    Min = 0,
+    Max = 500,
+    Default = 100,
+    Function = function() end,
+    Suffix = '%'
+})
+
+-- Motorbike
+local MotorbikeEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Motorbike Speed', Default = false })
+local MotorbikeSpeed = SpeedChanger:CreateSlider({
+    Name = 'Motorbike Speed',
+    Min = 0,
+    Max = 100,
+    Default = 0,
+    Function = function() end,
+    Suffix = 'x'
+})
+
+-- Tank
+local TankEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Tank Speed', Default = false })
+local TankSpeed = SpeedChanger:CreateSlider({
+    Name = 'Tank Engine Speed',
+    Min = 1,
+    Max = 500,
+    Default = 10,
+    Function = function() end,
+    Suffix = 'x'
+})
+
+-- Volt
+local VoltEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Volt Bike Speed', Default = false })
+local VoltSpeed = SpeedChanger:CreateSlider({
+    Name = 'Volt Speed Multiplier',
+    Min = 0,
+    Max = 25,
+    Default = 0,
+    Function = function() end,
+    Suffix = 'x'
+})
 	
