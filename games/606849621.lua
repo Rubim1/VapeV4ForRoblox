@@ -809,30 +809,33 @@ run(function()
 	})
 end)
 
-local VehicleNitro = vape.MinigamesCategory:CreateModule({
-    Name = 'InfiniteNitro',
-    Function = function(callback)
-        if callback then
-            -- Mendapatkan objek nitro dari game
-            local nitro = getupvalue(require(game:GetService("ReplicatedStorage").Game.Vehicle.NitroSystem).new, 8)
-            if nitro then
-                repeat
-                    task.wait()
-                    -- Memaksa nitro untuk selalu terisi penuh
-                    nitro.NitroLastMax = 250
-                    nitro.Nitro = math.random(10, 249) -- Memberikan sedikit variasi agar tidak terlihat mencurigakan
-                    nitro.NitroForceUIUpdate = true
-                until not VehicleNitro.Enabled
-            end
-        end
-    end,
-    Tooltip = 'Memberikan nitro tak terbatas untuk kendaraan Anda.'
-})
+run(function()
+	local VehicleNitro =
+		vape.MinigamesCategory:CreateModule({
+			Name = 'InfiniteNitro',
+			Function = function(callback)
+				if callback then
+					-- Mendapatkan objek nitro dari game
+					local nitro = getupvalue(require(game:GetService("ReplicatedStorage").Game.Vehicle.NitroSystem).new, 8)
+					if nitro then
+						repeat
+							task.wait()
+							-- Memaksa nitro untuk selalu terisi penuh
+							nitro.NitroLastMax = 250
+							nitro.Nitro = math.random(10, 249) -- sedikit variasi
+							nitro.NitroForceUIUpdate = true
+						until not VehicleNitro.Enabled
+					end
+				end
+			end,
+			Tooltip = 'Memberikan nitro tak terbatas untuk kendaraan Anda.'
+		})
+end)
 
 -- Modul Speed Changer
 local SpeedChanger = vape.MinigamesCategory:CreateModule({
-    Name = 'SpeedChanger',
-    Function = function(callback)
+	Name = 'SpeedChanger',
+	Function = function(callback)
         if callback then
             -- --- HOOKING & SETCONSTANT (Diterapkan sekali saat diaktifkan) ---
 
@@ -913,8 +916,8 @@ local SpeedChanger = vape.MinigamesCategory:CreateModule({
                 originalTankEngineConstant = nil
             end
         end
-    end,
-    Tooltip = 'Memungkinkan Anda untuk memodifikasi kecepatan, suspensi, dan belokan berbagai jenis kendaraan.'
+	end,
+	Tooltip = 'Memungkinkan Anda untuk memodifikasi kecepatan, suspensi, dan belokan berbagai jenis kendaraan.'
 })
 
 -- --- ELEMEN UI UNTUK SPEED CHANGER ---
