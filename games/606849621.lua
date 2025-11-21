@@ -1101,4 +1101,154 @@ VoltSpeed = SpeedChanger:CreateSlider({
     Function = function() end,
     Suffix = 'x'
 })
+
+-- Vehicle Tweaks module (car-specific QoL controls)
+local VehicleTweaks
+local CarPerfThread
+local CarEngineToggle
+local CarEngineMultiplier
+local CarTurnToggle
+local CarTurnMultiplier
+local CarSuspensionToggle
+local CarSuspensionHeight
+local InstantTowToggle
+local AntiHijackToggle
+
+local function beginCarLoop()
+	if CarPerfThread then return end
+	CarPerfThread = task.spawn(function()
+		while VehicleTweaks and VehicleTweaks.Enabled do
+			task.wait(0.1)
+			local ok, packet = pcall(function()
+				return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
+			end)
+
+			if ok and packet and packet.Type == 'Chassis' then
+				if CarEngineToggle.Enabled then
+					packet.GarageEngineSpeed = CarEngineMultiplier.Value
+				end
+				if CarTurnToggle.Enabled then
+					packet.TurnSpeed = CarTurnMultiplier.Value
+				end
+				if CarSuspensionToggle.Enabled then
+					packet.Height = CarSuspensionHeight.Value
+				end
+			end
+		end
+		CarPerfThread = nil
+	end)
+end
+
+local towingHooked
+local function applyTowHook()
+	if towingHooked then return end
+	local binder = require(game:GetService('ReplicatedStorage').VehicleLink.VehicleLinkBinder)
+	local constructor = binder._constructor
+	if not constructor or not constructor._hookNearest then return end
+
+	local original = constructor._hookNearest
+	towingHooked = original
+
+	constructor._hookNearest = function(self, data, ...)
+		if InstantTowToggle.Enabled and data and data.obj and data.nearestObj then
+			local geom = require(game:GetService('ReplicatedStorage'):WaitForChild('Std'):WaitForChild('GeomUtils'))
+			local closest = geom.closestPointInPart(data.nearestObj.PrimaryPart, data.obj.Position)
+			local offset = data.nearestObj.PrimaryPart.CFrame:PointToObjectSpace(closest)
+			data.manifest.reqLinkRemote:FireServer(data.nearestObj, offset)
+			return
+		end
+		return original(self, data, ...)
+	end
+end
+
+local function restoreTowHook()
+	if not towingHooked then return end
+	local binder = require(game:GetService('ReplicatedStorage').VehicleLink.VehicleLinkBinder)
+	local constructor = binder._constructor
+	constructor._hookNearest = towingHooked
+	towingHooked = nil
+end
+
+local hijackThread
+local function runHijackLoop()
+	if hijackThread then return end
+	hijackThread = task.spawn(function()
+		local actionService = require(game:GetService('ReplicatedStorage').ActionButton.ActionButtonService)
+		while AntiHijackToggle.Enabled do
+			task.wait(0.1)
+			for _, action in actionService.active do
+				if action.Name == 'Hijack' and table.find(action.keyCodes, Enum.KeyCode.V) then
+					action.onPressed(true)
+				end
+			end
+		end
+		hijackThread = nil
+	end)
+end
+
+VehicleTweaks = minigamesCategory:CreateModule({
+	Name = 'VehicleTweaks',
+	Function = function(callback)
+		if callback then
+			beginCarLoop()
+			if InstantTowToggle.Enabled then
+				applyTowHook()
+			end
+			if AntiHijackToggle.Enabled then
+				runHijackLoop()
+			end
+		else
+			restoreTowHook()
+		end
+	end,
+	Tooltip = 'Car engine/turn/suspension tweaks plus instant tow & hijack.'
+})
+
+CarEngineToggle = VehicleTweaks:CreateToggle({Name = 'Engine Override'})
+CarEngineMultiplier = VehicleTweaks:CreateSlider({
+	Name = 'Engine Speed',
+	Min = 10,
+	Max = 250,
+	Default = 50,
+	Function = function() end
+})
+
+CarTurnToggle = VehicleTweaks:CreateToggle({Name = 'Turn Speed Override'})
+CarTurnMultiplier = VehicleTweaks:CreateSlider({
+	Name = 'Turn Speed',
+	Min = 1,
+	Max = 6,
+	Default = 2,
+	Decimal = 1,
+	Function = function() end
+})
+
+CarSuspensionToggle = VehicleTweaks:CreateToggle({Name = 'Suspension Override'})
+CarSuspensionHeight = VehicleTweaks:CreateSlider({
+	Name = 'Suspension Height',
+	Min = 1,
+	Max = 200,
+	Default = 10,
+	Function = function() end
+})
+
+InstantTowToggle = VehicleTweaks:CreateToggle({
+	Name = 'Instant Tow',
+	Function = function(state)
+		if state then
+			applyTowHook()
+		else
+			restoreTowHook()
+		end
+	end
+})
+
+AntiHijackToggle = VehicleTweaks:CreateToggle({
+	Name = 'Auto Hijack',
+	Function = function(state)
+		if state then
+			runHijackLoop()
+		end
+	end
+})
 	
