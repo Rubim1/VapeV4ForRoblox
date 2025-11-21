@@ -892,6 +892,7 @@ run(function()
         Tooltip = 'Memberikan nitro tak terbatas pada semua kendaraan.'
     })
 end)
+
 	EngineSpeed = vape.minigamesCategory:CreateModule({
 		Name = 'Engine Speed',
 		Function = function(callback)
