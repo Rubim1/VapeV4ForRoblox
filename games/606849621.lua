@@ -969,7 +969,7 @@ local function hookHeli()
 		if VehicleOverdrive and VehicleOverdrive.Enabled and heliControls.speed.Enabled then
 			self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(
 				heliControls.forward.Value / 100,
-				heliControls.vertical.Value / 100,
+				heliControls.vertical.Value / 10,
 				heliControls.forward.Value / 100
 			)
 			self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * (heliControls.turn.Value / 100)
@@ -1161,6 +1161,7 @@ local CarTurnMultiplier
 local CarSuspensionToggle
 local CarSuspensionHeight
 local InstantTowToggle
+local InstantHeliToggle
 local AntiHijackToggle
 
 local function beginCarLoop()
@@ -1199,19 +1200,28 @@ local function applyTowHook()
 	towingHooked = original
 
 	constructor._hookNearest = function(self, data, ...)
-		if InstantTowToggle.Enabled and data and data.obj and data.nearestObj then
-			local geom = require(game:GetService('ReplicatedStorage'):WaitForChild('Std'):WaitForChild('GeomUtils'))
-			local closest = geom.closestPointInPart(data.nearestObj.PrimaryPart, data.obj.Position)
-			local offset = data.nearestObj.PrimaryPart.CFrame:PointToObjectSpace(closest)
-			data.manifest.reqLinkRemote:FireServer(data.nearestObj, offset)
-			return
+		if data and data.obj and data.nearestObj then
+			local ropeName = data.obj.Name
+			local isTow = InstantTowToggle.Enabled and ropeName == 'MetalHook'
+			local isHeli = InstantHeliToggle.Enabled and ropeName == 'RopePull'
+			if isTow or isHeli then
+				local geom = require(game:GetService('ReplicatedStorage'):WaitForChild('Std'):WaitForChild('GeomUtils'))
+				local closest = geom.closestPointInPart(data.nearestObj.PrimaryPart, data.obj.Position)
+				local offset = data.nearestObj.PrimaryPart.CFrame:PointToObjectSpace(closest)
+				data.manifest.reqLinkRemote:FireServer(data.nearestObj, offset)
+				return
+			end
 		end
 		return original(self, data, ...)
 	end
 end
 
-local function restoreTowHook()
+local function restoreTowHook(force)
 	if not towingHooked then return end
+	if not force then
+		if InstantTowToggle and InstantTowToggle.Enabled then return end
+		if InstantHeliToggle and InstantHeliToggle.Enabled then return end
+	end
 	local binder = require(game:GetService('ReplicatedStorage').VehicleLink.VehicleLinkBinder)
 	local constructor = binder._constructor
 	constructor._hookNearest = towingHooked
@@ -1247,7 +1257,7 @@ VehicleTweaks = minigamesCategory:CreateModule({
 				runHijackLoop()
 			end
 		else
-			restoreTowHook()
+			restoreTowHook(true)
 		end
 	end,
 	Tooltip = 'Car engine/turn/suspension tweaks plus instant tow & hijack.'
@@ -1283,6 +1293,17 @@ CarSuspensionHeight = VehicleTweaks:CreateSlider({
 
 InstantTowToggle = VehicleTweaks:CreateToggle({
 	Name = 'Instant Tow',
+	Function = function(state)
+		if state then
+			applyTowHook()
+		else
+			restoreTowHook()
+		end
+	end
+})
+
+InstantHeliToggle = VehicleTweaks:CreateToggle({
+	Name = 'Instant Heli Pickup',
 	Function = function(state)
 		if state then
 			applyTowHook()
