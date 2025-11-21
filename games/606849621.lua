@@ -836,87 +836,72 @@ end)
 
 -- Variabel untuk mengontrol loop dari luar fungsi toggle
 local isNitroLoopRunning = false
+local InfiniteNitro
 
 run(function()
-    -- Kategori bisa diganti menjadi 'Vehicle' agar lebih sesuai
-    vape.Categories.Utility:CreateModule({
-        Name = 'Infinite Nitro',
-        Function = function(callback)
-            -- callback akan bernilai true saat toggle di-ON, dan false saat di-OFF
-            if callback then
-                -- --- BAGIAN AKTIVASI (ON) ---
-                isNitroLoopRunning = true
-                local nitroStateTable = nil
+	InfiniteNitro = minigamesCategory:CreateModule({
+		Name = 'Infinite Nitro',
+		Function = function(callback)
+			if callback then
+				isNitroLoopRunning = true
+				local nitroStateTable
 
-                -- Langkah 1: Cari fungsi 'StartNitro' di dalam memory game
-                for _, func in ipairs(getgc()) do
-                    if type(func) == 'function' and getinfo(func).name == "StartNitro" then
-                        -- Langkah 2: Dapatkan tabel state nitro dari upvalue ke-8
-                        -- Ini adalah inti dari exploit, kita "mencuri" referensi ke tabel nitro
-                        nitroStateTable = getupvalue(func, 8)
-                        break -- Hentikan pencarian setelah ketemu
-                    end
-                end
+				for _, func in ipairs(getgc()) do
+					if type(func) == 'function' and getinfo(func).name == 'StartNitro' then
+						nitroStateTable = getupvalue(func, 8)
+						if nitroStateTable then break end
+					end
+				end
 
-                -- Pastikan kita berhasil menemukan tabel nitro sebelum memulai loop
-                if nitroStateTable then
-                    -- Buat fungsi loop yang akan dijalankan di thread terpisah
-                    local nitroLoop = function()
-                        -- Loop akan berjalan selama toggle aktif
-                        repeat
-                            -- Langkah 3: Manipulasi nilai di dalam tabel nitro
-                            nitroStateTable.NitroLastMax = 250  -- Set batas maksimum nitro
-                            nitroStateTable.Nitro = 249         -- Isi nitro terus-menerus (hampir penuh)
-                            nitroStateTable.NitroForceUIUpdate = true -- Paksa UI untuk update tampilan nitro bar
-                            
-                            task.wait() -- Jeda singkat untuk mencegah lag dan sinkron dengan frame game
-                        until not isNitroLoopRunning
-                    end
-
-                    -- Jalankan loop di latar belakang agar tidak mengganggu script utama
-                    task.spawn(nitroLoop)
-
-                else
-                    -- Beri tahu pengguna jika gagal menemukan fungsi (biasanya karena game update)
-                    warn("[Vape Infinite Nitro] Gagal menemukan tabel nitro. Script mungkin sudah usang atau game telah diperbarui.")
-                end
-
-            else
-                -- --- BAGIAN NON-AKTIVASI (OFF) ---
-                -- Langkah 4: Hentikan loop dengan mengubah flag menjadi false
-                isNitroLoopRunning = false
-                -- Tidak perlu merestore fungsi karena kita hanya mengubah nilai.
-                -- Saat loop berhenti, game akan mengambil alih kembali dan nitro akan habis secara normal.
-            end
-        end,
-        Tooltip = 'Memberikan nitro tak terbatas pada semua kendaraan.'
-    })
+				if nitroStateTable then
+					task.spawn(function()
+						repeat
+							nitroStateTable.NitroLastMax = 250
+							nitroStateTable.Nitro = 249
+							nitroStateTable.NitroForceUIUpdate = true
+							task.wait()
+						until not isNitroLoopRunning
+					end)
+				else
+					warn('[Vape Infinite Nitro] failed to locate nitro state table')
+					isNitroLoopRunning = false
+				end
+			else
+				isNitroLoopRunning = false
+			end
+		end,
+		Tooltip = 'Memberikan nitro tak terbatas pada semua kendaraan.'
+	})
 end)
 
-	EngineSpeed = vape.minigamesCategory:CreateModule({
+local EngineSpeed
+local EngineSpeedSlider
+
+run(function()
+	EngineSpeed = minigamesCategory:CreateModule({
 		Name = 'Engine Speed',
 		Function = function(callback)
 			if callback then
-				-- Hook into vehicle packet updates, adapt garage engine speed
 				local originalStats = {}
-				local function updateToOriginal()
-					local gvp = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils).GetLocalVehiclePacket()
+				local function restore()
+					local gvp = require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
 					if gvp and originalStats.GarageEngineSpeed then
 						gvp.GarageEngineSpeed = originalStats.GarageEngineSpeed
 					end
 				end
+
 				task.spawn(function()
 					repeat
 						task.wait(0.1)
-						local gvp = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils).GetLocalVehiclePacket()
-						if gvp and gvp.Type == "Chassis" then
+						local gvp = require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
+						if gvp and gvp.Type == 'Chassis' then
 							if not originalStats.GarageEngineSpeed then
 								originalStats.GarageEngineSpeed = gvp.GarageEngineSpeed
 							end
 							gvp.GarageEngineSpeed = EngineSpeedSlider.Value
 						end
 					until not EngineSpeed.Enabled
-					updateToOriginal()
+					restore()
 				end)
 			end
 		end,
