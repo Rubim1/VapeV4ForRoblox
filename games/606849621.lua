@@ -834,34 +834,64 @@ run(function()
 	})
 end)
 
-run(function()
-	InfiniteNitro = vape.minigamesCategory:CreateModule({
-		Name = 'Infinite Nitro',
-		Function = function(callback)
-			if callback then
-				-- Search for StartNitro GC function and extract nitro upvalue
-				local startnitro, nitro
-				for i, v in next, getgc() do
-					if type(v) == "function" and islclosure(v) and getinfo(v).name == "StartNitro" then
-						startnitro = v
-						nitro = getupvalue(v, 8)
-						break
-					end
-				end
-				if not nitro then return end
-				task.spawn(function()
-					repeat
-						task.wait()
-						nitro.NitroLastMax = 250
-						nitro.Nitro = 249
-						nitro.NitroForceUIUpdate = true
-					until not InfiniteNitro.Enabled
-				end)
-			end
-		end,
-		Tooltip = 'Provides infinite nitro by constantly refilling the nitro bar'
-	})
+-- Variabel untuk mengontrol loop dari luar fungsi toggle
+local isNitroLoopRunning = false
 
+run(function()
+    -- Kategori bisa diganti menjadi 'Vehicle' agar lebih sesuai
+    vape.Categories.Utility:CreateModule({
+        Name = 'Infinite Nitro',
+        Function = function(callback)
+            -- callback akan bernilai true saat toggle di-ON, dan false saat di-OFF
+            if callback then
+                -- --- BAGIAN AKTIVASI (ON) ---
+                isNitroLoopRunning = true
+                local nitroStateTable = nil
+
+                -- Langkah 1: Cari fungsi 'StartNitro' di dalam memory game
+                for _, func in ipairs(getgc()) do
+                    if type(func) == 'function' and getinfo(func).name == "StartNitro" then
+                        -- Langkah 2: Dapatkan tabel state nitro dari upvalue ke-8
+                        -- Ini adalah inti dari exploit, kita "mencuri" referensi ke tabel nitro
+                        nitroStateTable = getupvalue(func, 8)
+                        break -- Hentikan pencarian setelah ketemu
+                    end
+                end
+
+                -- Pastikan kita berhasil menemukan tabel nitro sebelum memulai loop
+                if nitroStateTable then
+                    -- Buat fungsi loop yang akan dijalankan di thread terpisah
+                    local nitroLoop = function()
+                        -- Loop akan berjalan selama toggle aktif
+                        repeat
+                            -- Langkah 3: Manipulasi nilai di dalam tabel nitro
+                            nitroStateTable.NitroLastMax = 250  -- Set batas maksimum nitro
+                            nitroStateTable.Nitro = 249         -- Isi nitro terus-menerus (hampir penuh)
+                            nitroStateTable.NitroForceUIUpdate = true -- Paksa UI untuk update tampilan nitro bar
+                            
+                            task.wait() -- Jeda singkat untuk mencegah lag dan sinkron dengan frame game
+                        until not isNitroLoopRunning
+                    end
+
+                    -- Jalankan loop di latar belakang agar tidak mengganggu script utama
+                    task.spawn(nitroLoop)
+
+                else
+                    -- Beri tahu pengguna jika gagal menemukan fungsi (biasanya karena game update)
+                    warn("[Vape Infinite Nitro] Gagal menemukan tabel nitro. Script mungkin sudah usang atau game telah diperbarui.")
+                end
+
+            else
+                -- --- BAGIAN NON-AKTIVASI (OFF) ---
+                -- Langkah 4: Hentikan loop dengan mengubah flag menjadi false
+                isNitroLoopRunning = false
+                -- Tidak perlu merestore fungsi karena kita hanya mengubah nilai.
+                -- Saat loop berhenti, game akan mengambil alih kembali dan nitro akan habis secara normal.
+            end
+        end,
+        Tooltip = 'Memberikan nitro tak terbatas pada semua kendaraan.'
+    })
+end)
 	EngineSpeed = vape.minigamesCategory:CreateModule({
 		Name = 'Engine Speed',
 		Function = function(callback)
