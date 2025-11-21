@@ -1199,7 +1199,9 @@ local function applyTowHook()
 	local original = constructor._hookNearest
 	towingHooked = original
 
-	constructor._hookNearest = function(self, data, ...)
+	constructor._hookNearest = function(...)
+		local args = {...}
+		local data = args[1]
 		if data and data.obj and data.nearestObj then
 			local ropeName = data.obj.Name
 			local isTow = InstantTowToggle.Enabled and ropeName == 'MetalHook'
@@ -1212,7 +1214,7 @@ local function applyTowHook()
 				return
 			end
 		end
-		return original(self, data, ...)
+		return original(...)
 	end
 end
 
