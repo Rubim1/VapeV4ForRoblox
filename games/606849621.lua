@@ -918,188 +918,237 @@ run(function()
 	})
 end)
 
--- Modul Speed Changer
-local CarEnabled, CarSpeed, SuspensionEnabled, CarSuspensionHeight, TurnSpeedEnabled, CarTurnSpeed
-local HeliEnabled, HeliSpeed, HeliVerticalSpeed, HeliTurnSpeed
-local MotorbikeEnabled, MotorbikeSpeed, TankEnabled, TankSpeed
-local VoltEnabled, VoltSpeed
-local SpeedChanger = minigamesCategory:CreateModule({
-	Name = 'SpeedChanger',
+-- Vehicle Overdrive module (full vehicle suite)
+local VehicleOverdrive
+local CarLoopThread
+local carControls = {}
+local heliControls = {}
+local voltControls = {}
+local bikeControls = {}
+local tankControls = {}
+local heliHooked
+local voltHooked
+
+local function getVehiclePacket()
+	return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
+end
+
+local function runCarLoop()
+	if CarLoopThread then return end
+	CarLoopThread = task.spawn(function()
+		while VehicleOverdrive and VehicleOverdrive.Enabled do
+			task.wait(0.1)
+			local ok, packet = pcall(getVehiclePacket)
+			if not ok or not packet then
+				continue
+			end
+
+			if packet.Type == 'Chassis' then
+				if carControls.engine.Enabled then
+					packet.GarageEngineSpeed = carControls.engineSlider.Value
+				end
+				if carControls.turn.Enabled then
+					packet.TurnSpeed = carControls.turnSlider.Value
+				end
+				if carControls.suspension.Enabled then
+					packet.Height = carControls.suspensionSlider.Value
+				end
+			elseif packet.Type == 'Heli' and heliControls.height.Enabled then
+				packet.MaxHeight = 9e9
+			end
+		end
+		CarLoopThread = nil
+	end)
+end
+
+local function hookHeli()
+	if heliHooked or not client.vclasses or not client.vclasses.Heli then return end
+	originalHeliUpdate = originalHeliUpdate or client.vclasses.Heli.Update
+	client.vclasses.Heli.Update = function(self, ...)
+		originalHeliUpdate(self, ...)
+		if VehicleOverdrive and VehicleOverdrive.Enabled and heliControls.speed.Enabled then
+			self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(
+				heliControls.forward.Value / 100,
+				heliControls.vertical.Value / 100,
+				heliControls.forward.Value / 100
+			)
+			self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * (heliControls.turn.Value / 100)
+		end
+	end
+	heliHooked = true
+end
+
+local function unhookHeli()
+	if not heliHooked or not originalHeliUpdate then return end
+	client.vclasses.Heli.Update = originalHeliUpdate
+	heliHooked = false
+end
+
+local function hookVolt()
+	if voltHooked or not client.vclasses or not client.vclasses.Volt then return end
+	originalVoltUpdate = originalVoltUpdate or client.vclasses.Volt.Update
+	client.vclasses.Volt.Update = function(self, ...)
+		originalVoltUpdate(self, ...)
+		if VehicleOverdrive and VehicleOverdrive.Enabled and voltControls.speed.Enabled then
+			self.Force.Force = self.Force.Force * (1 + voltControls.speedSlider.Value)
+		end
+	end
+	voltHooked = true
+end
+
+local function unhookVolt()
+	if not voltHooked or not originalVoltUpdate then return end
+	client.vclasses.Volt.Update = originalVoltUpdate
+	voltHooked = false
+end
+
+local function updateMotorbikeConstant()
+	if not client.alexchassis2 or not client.alexchassis2.UpdateHQ then return end
+	if VehicleOverdrive and VehicleOverdrive.Enabled and bikeControls.speed.Enabled then
+		if not originalMotorbikeSpeedConstant then
+			originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
+		end
+		setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + bikeControls.speedSlider.Value)
+	elseif originalMotorbikeSpeedConstant then
+		setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
+		originalMotorbikeSpeedConstant = nil
+	end
+end
+
+local function updateTankConstant()
+	if not client.tankbinder or not client.tankbinder._handleSeatedDriver then return end
+	if VehicleOverdrive and VehicleOverdrive.Enabled and tankControls.speed.Enabled then
+		local proto = getproto(client.tankbinder._handleSeatedDriver, 4)
+		if not originalTankEngineConstant then
+			originalTankEngineConstant = getconstant(proto, 20)
+		end
+		setconstant(proto, 20, tankControls.speedSlider.Value)
+	elseif originalTankEngineConstant then
+		setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, originalTankEngineConstant)
+		originalTankEngineConstant = nil
+	end
+end
+
+VehicleOverdrive = minigamesCategory:CreateModule({
+	Name = 'VehicleOverdrive',
 	Function = function(callback)
-        if callback then
-            -- --- HOOKING & SETCONSTANT (Diterapkan sekali saat diaktifkan) ---
-
-            -- Helicopter Speed
-            if HeliEnabled.Value then
-                originalHeliUpdate = client.vclasses.Heli.Update
-                client.vclasses.Heli.Update = function(self, ...)
-                    originalHeliUpdate(self, ...)
-                    -- Meningkatkan kecepatan gerak dan rotasi
-                    self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(HeliSpeed.Value / 10, HeliVerticalSpeed.Value / 10, HeliSpeed.Value / 10)
-                    self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * (HeliTurnSpeed.Value / 10)
-                end
-            end
-
-            -- Volt Bike Speed
-            if VoltEnabled.Value then
-                originalVoltUpdate = client.vclasses.Volt.Update
-                client.vclasses.Volt.Update = function(volt, ...)
-                    originalVoltUpdate(volt, ...)
-                    -- Meningkatkan gaya dorong (kecepatan)
-                    volt.Force.Force = volt.Force.Force * (1 + VoltSpeed.Value)
-                end
-            end
-
-            -- Motorbike Speed
-            if MotorbikeEnabled.Value then
-                -- Menyimpan konstanta asli
-                originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
-                -- Mengubah konstanta untuk meningkatkan kecepatan
-                setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + MotorbikeSpeed.Value)
-            end
-
-            -- Tank Speed
-            if TankEnabled.Value then
-                -- Menyimpan konstanta asli
-                originalTankEngineConstant = getconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20)
-                -- Mengubah konstanta untuk meningkatkan kecepatan mesin
-                setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, TankSpeed.Value)
-            end
-
-            -- --- LOOPING UPDATE (Berjalan terus-menerus saat modul aktif) ---
-            repeat
-                task.wait(0.1) -- Cek setiap 0.1 detik
-                local gvp = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils).GetLocalVehiclePacket()
-
-                -- Car Modifications (diperbarui secara terus-menerus)
-                if gvp and gvp.Type == "Chassis" then
-                    if CarEnabled.Value then
-                        gvp.GarageEngineSpeed = CarSpeed.Value
-                    end
-                    if SuspensionEnabled.Value then
-                        gvp.Height = CarSuspensionHeight.Value
-                    end
-                    if TurnSpeedEnabled.Value then
-                        gvp.TurnSpeed = CarTurnSpeed.Value
-                    end
-                end
-
-            until not SpeedChanger.Enabled
-
-            -- --- PEMULIHAN (Diterapkan saat modul dinonaktifkan) ---
-
-            -- Memulihkan fungsi dan konstanta asli
-            if originalHeliUpdate then
-                client.vclasses.Heli.Update = originalHeliUpdate
-                originalHeliUpdate = nil
-            end
-            if originalVoltUpdate then
-                client.vclasses.Volt.Update = originalVoltUpdate
-                originalVoltUpdate = nil
-            end
-            if originalMotorbikeSpeedConstant then
-                setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
-                originalMotorbikeSpeedConstant = nil
-            end
-            if originalTankEngineConstant then
-                setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, originalTankEngineConstant)
-                originalTankEngineConstant = nil
-            end
-        end
+		if callback then
+			runCarLoop()
+			hookHeli()
+			hookVolt()
+			updateMotorbikeConstant()
+			updateTankConstant()
+		else
+			unhookHeli()
+			unhookVolt()
+			updateMotorbikeConstant()
+			updateTankConstant()
+		end
 	end,
-	Tooltip = 'Memungkinkan Anda untuk memodifikasi kecepatan, suspensi, dan belokan berbagai jenis kendaraan.'
+	Tooltip = 'Suite kecepatan kendaraan lengkap (mobil, heli, volt, motor, tank).'
 })
 
--- --- ELEMEN UI UNTUK SPEED CHANGER ---
-
--- Car
-CarEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Speed', Default = false })
-CarSpeed = SpeedChanger:CreateSlider({
-    Name = 'Car Speed',
-    Min = 1,
-    Max = 200,
-    Default = 10,
-    Function = function() end, -- Fungsi akan di-handle oleh loop utama
-    Suffix = 'x'
+carControls.engine = VehicleOverdrive:CreateToggle({Name = 'Car Engine Override'})
+carControls.engineSlider = VehicleOverdrive:CreateSlider({
+	Name = 'Car Engine Speed',
+	Min = 1,
+	Max = 200,
+	Default = 10,
+	Function = function() end,
+	Suffix = 'x'
 })
-SuspensionEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Suspension', Default = false })
-CarSuspensionHeight = SpeedChanger:CreateSlider({
-    Name = 'Car Suspension Height',
-    Min = 1,
-    Max = 200,
-    Default = 10,
-    Function = function() end,
-    Suffix = ''
+carControls.turn = VehicleOverdrive:CreateToggle({Name = 'Car Turn Override'})
+carControls.turnSlider = VehicleOverdrive:CreateSlider({
+	Name = 'Car Turn Speed',
+	Min = 1,
+	Max = 5,
+	Default = 1,
+	Decimal = 1,
+	Function = function() end,
+	Suffix = 'x'
 })
-TurnSpeedEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Car Turn Speed', Default = false })
-CarTurnSpeed = SpeedChanger:CreateSlider({
-    Name = 'Car Turn Speed',
-    Min = 1,
-    Max = 5,
-    Default = 1,
-    Decimal = 1,
-    Function = function() end,
-    Suffix = 'x'
+carControls.suspension = VehicleOverdrive:CreateToggle({Name = 'Car Suspension Override'})
+carControls.suspensionSlider = VehicleOverdrive:CreateSlider({
+	Name = 'Suspension Height',
+	Min = 1,
+	Max = 200,
+	Default = 10,
+	Function = function() end
 })
 
--- Helicopter
-HeliEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Helicopter Speed', Default = false })
-HeliSpeed = SpeedChanger:CreateSlider({
-    Name = 'Heli Forward/Backward Speed',
-    Min = 0,
-    Max = 500,
-    Default = 100,
-    Function = function() end,
-    Suffix = '%'
+heliControls.speed = VehicleOverdrive:CreateToggle({Name = 'Heli Speed Override'})
+heliControls.forward = VehicleOverdrive:CreateSlider({
+	Name = 'Heli Forward Speed %',
+	Min = 10,
+	Max = 500,
+	Default = 100,
+	Function = function() end
 })
-HeliVerticalSpeed = SpeedChanger:CreateSlider({
-    Name = 'Heli Vertical Speed',
-    Min = 0,
-    Max = 300,
-    Default = 100,
-    Function = function() end,
-    Suffix = '%'
+heliControls.vertical = VehicleOverdrive:CreateSlider({
+	Name = 'Heli Vertical Speed %',
+	Min = 10,
+	Max = 300,
+	Default = 100,
+	Function = function() end
 })
-HeliTurnSpeed = SpeedChanger:CreateSlider({
-    Name = 'Heli Turn Speed',
-    Min = 0,
-    Max = 500,
-    Default = 100,
-    Function = function() end,
-    Suffix = '%'
+heliControls.turn = VehicleOverdrive:CreateSlider({
+	Name = 'Heli Turn Speed %',
+	Min = 10,
+	Max = 500,
+	Default = 100,
+	Function = function() end
+})
+heliControls.height = VehicleOverdrive:CreateToggle({Name = 'Heli Infinite Height'})
+
+voltControls.speed = VehicleOverdrive:CreateToggle({
+	Name = 'Volt Speed Override',
+	Function = function(state)
+		if state then
+			hookVolt()
+		end
+	end
+})
+voltControls.speedSlider = VehicleOverdrive:CreateSlider({
+	Name = 'Volt Multiplier',
+	Min = 0,
+	Max = 25,
+	Default = 0,
+	Function = function() end,
+	Suffix = 'x'
 })
 
--- Motorbike
-MotorbikeEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Motorbike Speed', Default = false })
-MotorbikeSpeed = SpeedChanger:CreateSlider({
-    Name = 'Motorbike Speed',
-    Min = 0,
-    Max = 100,
-    Default = 0,
-    Function = function() end,
-    Suffix = 'x'
+bikeControls.speed = VehicleOverdrive:CreateToggle({
+	Name = 'Motorbike Speed Override',
+	Function = function()
+		updateMotorbikeConstant()
+	end
+})
+bikeControls.speedSlider = VehicleOverdrive:CreateSlider({
+	Name = 'Motorbike Multiplier',
+	Min = 0,
+	Max = 100,
+	Default = 0,
+	Function = function()
+		updateMotorbikeConstant()
+	end,
+	Suffix = 'x'
 })
 
--- Tank
-TankEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Tank Speed', Default = false })
-TankSpeed = SpeedChanger:CreateSlider({
-    Name = 'Tank Engine Speed',
-    Min = 1,
-    Max = 500,
-    Default = 10,
-    Function = function() end,
-    Suffix = 'x'
+tankControls.speed = VehicleOverdrive:CreateToggle({
+	Name = 'Tank Engine Override',
+	Function = function()
+		updateTankConstant()
+	end
 })
-
--- Volt
-VoltEnabled = SpeedChanger:CreateToggle({ Name = 'Modify Volt Bike Speed', Default = false })
-VoltSpeed = SpeedChanger:CreateSlider({
-    Name = 'Volt Speed Multiplier',
-    Min = 0,
-    Max = 25,
-    Default = 0,
-    Function = function() end,
-    Suffix = 'x'
+tankControls.speedSlider = VehicleOverdrive:CreateSlider({
+	Name = 'Tank Engine Speed',
+	Min = 1,
+	Max = 500,
+	Default = 10,
+	Function = function()
+		updateTankConstant()
+	end,
+	Suffix = 'x'
 })
 
 -- Vehicle Tweaks module (car-specific QoL controls)
