@@ -65,13 +65,23 @@ local prediction = vape.Libraries.prediction
 local targetinfo = vape.Libraries.targetinfo
 local sessioninfo = vape.Libraries.sessioninfo
 local vm = loadstring(downloadFile('newvape/libraries/vm.lua'), 'vm')()
+local NITRO_UPDATE_INTERVAL = 0.1
 
 local HookManager = {restoreCallbacks = {}}
-function HookManager:hookFunction(target, handler)
+local function wrapHook(label, handler, original, ...)
+	local ok, result = pcall(handler, original, ...)
+	if not ok then
+		warn(('[Vape Hook:%s] %s'):format(label or 'unknown', result))
+		return original(...)
+	end
+	return result
+end
+
+function HookManager:hookFunction(target, handler, label)
 	if typeof(target) ~= 'function' then return end
 	local original
 	original = hookfunction(target, function(...)
-		return handler(original, ...)
+		return wrapHook(label, handler, original, ...)
 	end)
 	local function restore()
 		hookfunction(target, original)
@@ -80,11 +90,11 @@ function HookManager:hookFunction(target, handler)
 	return original, restore
 end
 
-function HookManager:hookMethod(object, method, handler)
+function HookManager:hookMethod(object, method, handler, label)
 	if not object or type(object[method]) ~= 'function' then return end
 	local original = object[method]
 	object[method] = function(...)
-		return handler(original, ...)
+		return wrapHook(label, handler, original, ...)
 	end
 	local function restore()
 		object[method] = original
@@ -406,7 +416,7 @@ run(function()
 
 	fireServerOriginal = HookManager:hookFunction(fireserver, function(original, self, id, ...)
 		return fireHook(original, self, id, ...)
-	end)
+	end, 'VehicleFireServer')
 
 	function jb:FireServer(id, ...)
 		if not remotes[id] then
@@ -443,10 +453,11 @@ run(function()
 				arrests:Increment()
 			end
 			return original(amount, text, ...)
-		end)
+		end, 'CashHook')
 	end
 
 	vape:Clean(function()
+		isNitroLoopRunning = false
 		table.clear(remotes)
 		table.clear(jb)
 		HookManager:restoreAll()
@@ -624,7 +635,7 @@ run(function()
 						shotData.isWallbang = nil
 						shotData.isHeadshot = true
 						return original(...)
-					end)
+					end, 'WallbangHook')
 				end
 	
 				repeat
@@ -877,7 +888,7 @@ run(function()
 				if not keySpoofRestore then
 					_, keySpoofRestore = HookManager:hookMethod(jb.PlayerUtils, 'hasKey', function()
 						return true
-					end)
+					end, 'KeySpoofer')
 				end
 			else
 				if keySpoofRestore then
@@ -915,7 +926,7 @@ run(function()
 							nitroStateTable.NitroLastMax = 250
 							nitroStateTable.Nitro = 249
 							nitroStateTable.NitroForceUIUpdate = true
-							task.wait()
+							task.wait(NITRO_UPDATE_INTERVAL)
 						until not isNitroLoopRunning
 					end)
 				else
@@ -990,6 +1001,23 @@ local bikeControls = {}
 local tankControls = {}
 local heliHooked
 local voltHooked
+local function sliderValue(slider, min, max, default)
+	local value = slider and slider.Value or default or min or 0
+	if min and max then
+		return math.clamp(value, min, max)
+	end
+	return value
+end
+
+local CAR_ENGINE_MIN, CAR_ENGINE_MAX, CAR_ENGINE_DEFAULT = 1, 200, 10
+local CAR_TURN_MIN, CAR_TURN_MAX, CAR_TURN_DEFAULT = 1, 5, 1
+local CAR_SUSPENSION_MIN, CAR_SUSPENSION_MAX, CAR_SUSPENSION_DEFAULT = 1, 200, 10
+local HELI_FORWARD_MIN, HELI_FORWARD_MAX, HELI_FORWARD_DEFAULT = 10, 500, 100
+local HELI_VERTICAL_MIN, HELI_VERTICAL_MAX, HELI_VERTICAL_DEFAULT = 10, 300, 100
+local HELI_TURN_MIN, HELI_TURN_MAX, HELI_TURN_DEFAULT = 10, 500, 100
+local VOLT_MIN, VOLT_MAX, VOLT_DEFAULT = 0, 25, 0
+local MOTORBIKE_MIN, MOTORBIKE_MAX, MOTORBIKE_DEFAULT = 0, 100, 0
+local TANK_MIN, TANK_MAX, TANK_DEFAULT = 1, 500, 10
 
 local function getVehiclePacket()
 	return safeCall('VehiclePacket', function()
@@ -1083,19 +1111,19 @@ local function updateChassisPacket(packet)
 	end
 
 	if carControls.engine.Enabled then
-		packet.GarageEngineSpeed = carControls.engineSlider.Value
+		packet.GarageEngineSpeed = sliderValue(carControls.engineSlider, CAR_ENGINE_MIN, CAR_ENGINE_MAX, CAR_ENGINE_DEFAULT)
 	elseif originalChassisStats and originalChassisStats.GarageEngineSpeed then
 		packet.GarageEngineSpeed = originalChassisStats.GarageEngineSpeed
 	end
 
 	if carControls.turn.Enabled then
-		packet.TurnSpeed = carControls.turnSlider.Value
+		packet.TurnSpeed = sliderValue(carControls.turnSlider, CAR_TURN_MIN, CAR_TURN_MAX, CAR_TURN_DEFAULT)
 	elseif originalChassisStats and originalChassisStats.TurnSpeed then
 		packet.TurnSpeed = originalChassisStats.TurnSpeed
 	end
 
 	if carControls.suspension.Enabled then
-		packet.Height = carControls.suspensionSlider.Value
+		packet.Height = sliderValue(carControls.suspensionSlider, CAR_SUSPENSION_MIN, CAR_SUSPENSION_MAX, CAR_SUSPENSION_DEFAULT)
 	elseif originalChassisStats and originalChassisStats.Height then
 		packet.Height = originalChassisStats.Height
 	end
@@ -1149,12 +1177,15 @@ local function hookHeli()
 	client.vclasses.Heli.Update = function(self, ...)
 		originalHeliUpdate(self, ...)
 		if VehicleOverdrive and VehicleOverdrive.Enabled and heliControls.speed.Enabled then
+			local forwardMul = sliderValue(heliControls.forward, HELI_FORWARD_MIN, HELI_FORWARD_MAX, HELI_FORWARD_DEFAULT) / 100
+			local verticalMul = sliderValue(heliControls.vertical, HELI_VERTICAL_MIN, HELI_VERTICAL_MAX, HELI_VERTICAL_DEFAULT) / 10
+			local turnMul = sliderValue(heliControls.turn, HELI_TURN_MIN, HELI_TURN_MAX, HELI_TURN_DEFAULT) / 100
 			self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(
-				heliControls.forward.Value / 100,
-				heliControls.vertical.Value / 10,
-				heliControls.forward.Value / 100
+				forwardMul,
+				verticalMul,
+				forwardMul
 			)
-			self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * (heliControls.turn.Value / 100)
+			self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * turnMul
 		end
 	end
 	heliHooked = true
@@ -1172,7 +1203,8 @@ local function hookVolt()
 	client.vclasses.Volt.Update = function(self, ...)
 		originalVoltUpdate(self, ...)
 		if VehicleOverdrive and VehicleOverdrive.Enabled and voltControls.speed.Enabled then
-			self.Force.Force = self.Force.Force * (1 + voltControls.speedSlider.Value)
+			local multiplier = sliderValue(voltControls.speedSlider, VOLT_MIN, VOLT_MAX, VOLT_DEFAULT)
+			self.Force.Force = self.Force.Force * (1 + multiplier)
 		end
 	end
 	voltHooked = true
@@ -1190,7 +1222,8 @@ local function updateMotorbikeConstant()
 		if not originalMotorbikeSpeedConstant then
 			originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
 		end
-		setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + bikeControls.speedSlider.Value)
+		local value = sliderValue(bikeControls.speedSlider, MOTORBIKE_MIN, MOTORBIKE_MAX, MOTORBIKE_DEFAULT)
+		setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + value)
 	elseif originalMotorbikeSpeedConstant then
                 setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
                 originalMotorbikeSpeedConstant = nil
@@ -1204,7 +1237,8 @@ local function updateTankConstant()
 		if not originalTankEngineConstant then
 			originalTankEngineConstant = getconstant(proto, 20)
 		end
-		setconstant(proto, 20, tankControls.speedSlider.Value)
+		local value = sliderValue(tankControls.speedSlider, TANK_MIN, TANK_MAX, TANK_DEFAULT)
+		setconstant(proto, 20, value)
 	elseif originalTankEngineConstant then
                 setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, originalTankEngineConstant)
                 originalTankEngineConstant = nil
