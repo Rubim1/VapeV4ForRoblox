@@ -65,6 +65,53 @@ local prediction = vape.Libraries.prediction
 local targetinfo = vape.Libraries.targetinfo
 local sessioninfo = vape.Libraries.sessioninfo
 local vm = loadstring(downloadFile('newvape/libraries/vm.lua'), 'vm')()
+
+local HookManager = {restoreCallbacks = {}}
+function HookManager:hookFunction(target, handler)
+	if typeof(target) ~= 'function' then return end
+	local original
+	original = hookfunction(target, function(...)
+		return handler(original, ...)
+	end)
+	local function restore()
+		hookfunction(target, original)
+	end
+	table.insert(self.restoreCallbacks, restore)
+	return original, restore
+end
+
+function HookManager:hookMethod(object, method, handler)
+	if not object or type(object[method]) ~= 'function' then return end
+	local original = object[method]
+	object[method] = function(...)
+		return handler(original, ...)
+	end
+	local function restore()
+		object[method] = original
+	end
+	table.insert(self.restoreCallbacks, restore)
+	return original, restore
+end
+
+function HookManager:restoreAll()
+	for i = #self.restoreCallbacks, 1, -1 do
+		pcall(self.restoreCallbacks[i])
+	end
+	table.clear(self.restoreCallbacks)
+end
+
+local function safeCall(label, fn, ...)
+	local ok, result = pcall(fn, ...)
+	if not ok then
+		warn(('[Vape:%s] %s'):format(label, result))
+		if vape and vape.CreateNotification then
+			pcall(vape.CreateNotification, vape, 'Vape', label .. ' failed', 10, 'alert')
+		end
+		return nil
+	end
+	return result
+end
+
 local client = {}
 do
 	local ok, mod
@@ -305,7 +352,8 @@ run(function()
 		if vape.Loaded == nil then return end
 	end
 	local remotetable = debug.getupvalue(jb.VehicleController.toggleLocalLocked, 2)
-	local fireserver, hook = remotetable.FireServer
+	local fireserver = remotetable.FireServer
+	local fireServerOriginal
 
 	remotes = dumpRemotes({
 		replicatedStorage.Game.TrainSystem.LocomotiveFront,
@@ -336,7 +384,7 @@ run(function()
 		UpdateMousePosition = 'AimPosition'
 	})
 
-	local function fireHook(self, id, ...)
+	local function fireHook(original, self, id, ...)
 		local rem
 		for i, v in remotes do
 			if v == id then
@@ -353,11 +401,11 @@ run(function()
 			print(id, rem or id, ...)
 		end
 
-		return hook(self, id, ...)
+		return original(self, id, ...)
 	end
 
-	hook = hookfunction(fireserver, function(self, id, ...)
-		return fireHook(self, id, ...)
+	fireServerOriginal = HookManager:hookFunction(fireserver, function(original, self, id, ...)
+		return fireHook(original, self, id, ...)
 	end)
 
 	function jb:FireServer(id, ...)
@@ -365,7 +413,7 @@ run(function()
 			notif('Vape', 'Failed to find remote ('..id..')', 10, 'alert')
 			return
 		end
-		return hook(remotetable, remotes[id], ...)
+		return fireServerOriginal(remotetable, remotes[id], ...)
 	end
 
 	local arrests = sessioninfo:AddItem('Arrested')
@@ -387,24 +435,21 @@ run(function()
 		return text
 	end, false)
 
-	local cashfunc, cashhook = getCash()
+	local cashfunc, cashRestore
 	if cashfunc then
-		cashhook = hookfunction(cashfunc, function(amount, text, ...)
+		_, cashRestore = HookManager:hookFunction(cashfunc, function(original, amount, text, ...)
 			moneymade:Increment(amount)
 			if text == 'Arrest' then
 				arrests:Increment()
 			end
-			return cashhook(amount, text, ...)
+			return original(amount, text, ...)
 		end)
 	end
 
 	vape:Clean(function()
 		table.clear(remotes)
 		table.clear(jb)
-		hookfunction(fireserver, hook)
-		hookfunction(cashfunc, cashhook)
-		--restorefunction(fireserver)
-		--restorefunction(cashfunc)
+		HookManager:restoreAll()
 	end)
 end)
 
@@ -567,18 +612,20 @@ end)
 	
 run(function()
 	local Wallbang = {Enabled = false}
+	local wallbangRestore
 	
 	Wallbang = vape.Categories.Combat:CreateModule({
 		Name = 'Wallbang',
 		Function = function(callback)
 			if callback then
-				local hook
-				hook = hookfunction(jb.GunController.BulletEmitterOnLocalHitPlayer, function(...)
-					local shotData = select(15, ...)
-					shotData.isWallbang = nil
-					shotData.isHeadshot = true
-					return hook(...)
-				end)
+				if not wallbangRestore then
+					_, wallbangRestore = HookManager:hookMethod(jb.GunController, 'BulletEmitterOnLocalHitPlayer', function(original, ...)
+						local shotData = select(15, ...)
+						shotData.isWallbang = nil
+						shotData.isHeadshot = true
+						return original(...)
+					end)
+				end
 	
 				repeat
 					local item = jb.ItemSystemController:GetLocalEquipped()
@@ -588,7 +635,10 @@ run(function()
 					task.wait(0.1)
 				until not Wallbang.Enabled
 			else
-				restorefunction(jb.GunController.BulletEmitterOnLocalHitPlayer)
+				if wallbangRestore then
+					wallbangRestore()
+					wallbangRestore = nil
+				end
 			end
 		end,
 		Tooltip = 'Modifies bullets to always do headshot damage & shooting through most walls.'
@@ -819,15 +869,21 @@ run(function()
 end)
 	
 run(function()
+	local keySpoofRestore
 	vape.Categories.Utility:CreateModule({
 		Name = 'KeySpoofer',
 		Function = function(callback)
 			if callback then
-				hookfunction(jb.PlayerUtils.hasKey, function() 
-					return true 
-				end)
+				if not keySpoofRestore then
+					_, keySpoofRestore = HookManager:hookMethod(jb.PlayerUtils, 'hasKey', function()
+						return true
+					end)
+				end
 			else
-				restorefunction(jb.PlayerUtils.hasKey)
+				if keySpoofRestore then
+					keySpoofRestore()
+					keySpoofRestore = nil
+				end
 			end
 		end,
 		Tooltip = 'Enables most doors to be walked through'
@@ -936,17 +992,16 @@ local heliHooked
 local voltHooked
 
 local function getVehiclePacket()
-	return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
+	return safeCall('VehiclePacket', function()
+		return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
+	end)
 end
 
 local function restoreChassisStats(packetOverride)
 	if not originalChassisStats then return end
 	local packet = packetOverride
 	if not packet then
-		local ok, result = pcall(getVehiclePacket)
-		if ok then
-			packet = result
-		end
+		packet = getVehiclePacket()
 	end
 	if packet and packet.Type == 'Chassis' then
 		if originalChassisStats.GarageEngineSpeed then
@@ -1052,10 +1107,10 @@ local function pulseChassisOverrides()
 	task.spawn(function()
 	local iterations = 0
 	while inVehicle and VehicleOverdrive and VehicleOverdrive.Enabled and iterations < 120 do
-			local ok, packet = pcall(getVehiclePacket)
-			if ok and packet then
-				updateChassisPacket(packet)
-			end
+		local packet = getVehiclePacket()
+		if packet then
+			updateChassisPacket(packet)
+		end
 			task.wait(0.03)
 		iterations = iterations + 1
 		end
@@ -1071,8 +1126,8 @@ local function runCarLoop()
 			if not inVehicle then
 				continue
 			end
-			local ok, packet = pcall(getVehiclePacket)
-			if not ok or not packet then
+			local packet = getVehiclePacket()
+			if not packet then
 				continue
 			end
 
@@ -1354,11 +1409,9 @@ local function beginCarLoop()
 	CarPerfThread = task.spawn(function()
 		while VehicleTweaks and VehicleTweaks.Enabled do
 			task.wait(0.1)
-			local ok, packet = pcall(function()
-				return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
-			end)
+			local packet = getVehiclePacket()
 
-			if ok and packet and packet.Type == 'Chassis' then
+			if packet and packet.Type == 'Chassis' then
 				if CarEngineToggle.Enabled then
 					packet.GarageEngineSpeed = CarEngineMultiplier.Value
 				end
