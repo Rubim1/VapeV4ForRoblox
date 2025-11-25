@@ -935,26 +935,48 @@ end
 
 local function runCarLoop()
 	if CarLoopThread then return end
+	local originalChassis
 	CarLoopThread = task.spawn(function()
 		while VehicleOverdrive and VehicleOverdrive.Enabled do
 			task.wait(0.1)
 			local ok, packet = pcall(getVehiclePacket)
 			if not ok or not packet then
+				if originalChassis then
+					originalChassis = nil
+				end
 				continue
 			end
 
 			if packet.Type == 'Chassis' then
+				if not originalChassis then
+					originalChassis = {
+						GarageEngineSpeed = packet.GarageEngineSpeed,
+						TurnSpeed = packet.TurnSpeed,
+						Height = packet.Height
+					}
+				end
+
 				if carControls.engine.Enabled then
 					packet.GarageEngineSpeed = carControls.engineSlider.Value
+				elseif originalChassis.GarageEngineSpeed then
+					packet.GarageEngineSpeed = originalChassis.GarageEngineSpeed
 				end
+
 				if carControls.turn.Enabled then
 					packet.TurnSpeed = carControls.turnSlider.Value
+				elseif originalChassis.TurnSpeed then
+					packet.TurnSpeed = originalChassis.TurnSpeed
 				end
+
 				if carControls.suspension.Enabled then
 					packet.Height = carControls.suspensionSlider.Value
+				elseif originalChassis.Height then
+					packet.Height = originalChassis.Height
 				end
 			elseif packet.Type == 'Heli' and heliControls.height.Enabled then
 				packet.MaxHeight = 9e9
+			else
+				originalChassis = nil
 			end
 		end
 		CarLoopThread = nil
