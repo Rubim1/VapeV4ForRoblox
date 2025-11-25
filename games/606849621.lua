@@ -841,8 +841,8 @@ local InfiniteNitro
 run(function()
 	InfiniteNitro = minigamesCategory:CreateModule({
 		Name = 'Infinite Nitro',
-		Function = function(callback)
-			if callback then
+			Function = function(callback)
+				if callback then
 				isNitroLoopRunning = true
 				local nitroStateTable
 
@@ -868,10 +868,10 @@ run(function()
 				end
 			else
 				isNitroLoopRunning = false
-			end
-		end,
+				end
+			end,
 		Tooltip = 'Memberikan nitro tak terbatas pada semua kendaraan.'
-	})
+		})
 end)
 
 local EngineSpeed
@@ -880,8 +880,8 @@ local EngineSpeedSlider
 run(function()
 	EngineSpeed = minigamesCategory:CreateModule({
 		Name = 'Engine Speed',
-		Function = function(callback)
-			if callback then
+	Function = function(callback)
+        if callback then
 				local originalStats = {}
 				local function restore()
 					local gvp = require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
@@ -921,6 +921,11 @@ end)
 -- Vehicle Overdrive module (full vehicle suite)
 local VehicleOverdrive
 local CarLoopThread
+local currentChassisModel
+local lastChassisPacket
+local originalChassisStats
+local inVehicle = false
+local chassisPulseActive = false
 local carControls = {}
 local heliControls = {}
 local voltControls = {}
@@ -933,50 +938,126 @@ local function getVehiclePacket()
 	return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils).GetLocalVehiclePacket()
 end
 
+local function restoreChassisStats(packetOverride)
+	if not originalChassisStats then return end
+	local packet = packetOverride
+	if not packet then
+		local ok, result = pcall(getVehiclePacket)
+		if ok then
+			packet = result
+		end
+	end
+	if packet and packet.Type == 'Chassis' then
+		if originalChassisStats.GarageEngineSpeed then
+			packet.GarageEngineSpeed = originalChassisStats.GarageEngineSpeed
+		end
+		if originalChassisStats.TurnSpeed then
+			packet.TurnSpeed = originalChassisStats.TurnSpeed
+		end
+		if originalChassisStats.Height then
+			packet.Height = originalChassisStats.Height
+		end
+	end
+	originalChassisStats = nil
+end
+
+local function bindSeatListener(character)
+	local humanoid = character:FindFirstChildOfClass('Humanoid') or character:WaitForChild('Humanoid', 5)
+	if not humanoid then return end
+	humanoid.Seated:Connect(function(isSeated)
+		inVehicle = isSeated
+		if not isSeated then
+			restoreChassisStats(lastChassisPacket)
+			currentChassisModel = nil
+			lastChassisPacket = nil
+		end
+	end)
+end
+
+if lplr.Character then
+	bindSeatListener(lplr.Character)
+end
+lplr.CharacterAdded:Connect(bindSeatListener)
+
+local function updateChassisPacket(packet)
+	if not packet or packet.Type ~= 'Chassis' then
+		restoreChassisStats(lastChassisPacket)
+		currentChassisModel = nil
+		lastChassisPacket = nil
+		return
+	end
+
+	if currentChassisModel and packet.Model ~= currentChassisModel then
+		restoreChassisStats(lastChassisPacket)
+		originalChassisStats = nil
+	end
+
+	currentChassisModel = packet.Model
+	lastChassisPacket = packet
+
+	if not originalChassisStats then
+		originalChassisStats = {
+			GarageEngineSpeed = packet.GarageEngineSpeed,
+			TurnSpeed = packet.TurnSpeed,
+			Height = packet.Height
+		}
+	end
+
+	if carControls.engine.Enabled then
+		packet.GarageEngineSpeed = carControls.engineSlider.Value
+	elseif originalChassisStats and originalChassisStats.GarageEngineSpeed then
+		packet.GarageEngineSpeed = originalChassisStats.GarageEngineSpeed
+	end
+
+	if carControls.turn.Enabled then
+		packet.TurnSpeed = carControls.turnSlider.Value
+	elseif originalChassisStats and originalChassisStats.TurnSpeed then
+		packet.TurnSpeed = originalChassisStats.TurnSpeed
+	end
+
+	if carControls.suspension.Enabled then
+		packet.Height = carControls.suspensionSlider.Value
+	elseif originalChassisStats and originalChassisStats.Height then
+		packet.Height = originalChassisStats.Height
+	end
+end
+
+local function pulseChassisOverrides()
+	if chassisPulseActive then return end
+	chassisPulseActive = true
+	task.spawn(function()
+		local iterations = 0
+		while inVehicle and VehicleOverdrive and VehicleOverdrive.Enabled and iterations < 120 do
+			local ok, packet = pcall(getVehiclePacket)
+			if ok and packet then
+				updateChassisPacket(packet)
+			end
+			task.wait(0.03)
+			iterations += 1
+		end
+		chassisPulseActive = false
+	end)
+end
+
 local function runCarLoop()
 	if CarLoopThread then return end
-	local originalChassis
 	CarLoopThread = task.spawn(function()
 		while VehicleOverdrive and VehicleOverdrive.Enabled do
 			task.wait(0.1)
+			if not inVehicle then
+				continue
+			end
 			local ok, packet = pcall(getVehiclePacket)
 			if not ok or not packet then
-				if originalChassis then
-					originalChassis = nil
-				end
 				continue
 			end
 
 			if packet.Type == 'Chassis' then
-				if not originalChassis then
-					originalChassis = {
-						GarageEngineSpeed = packet.GarageEngineSpeed,
-						TurnSpeed = packet.TurnSpeed,
-						Height = packet.Height
-					}
-				end
-
-				if carControls.engine.Enabled then
-					packet.GarageEngineSpeed = carControls.engineSlider.Value
-				elseif originalChassis.GarageEngineSpeed then
-					packet.GarageEngineSpeed = originalChassis.GarageEngineSpeed
-				end
-
-				if carControls.turn.Enabled then
-					packet.TurnSpeed = carControls.turnSlider.Value
-				elseif originalChassis.TurnSpeed then
-					packet.TurnSpeed = originalChassis.TurnSpeed
-				end
-
-				if carControls.suspension.Enabled then
-					packet.Height = carControls.suspensionSlider.Value
-				elseif originalChassis.Height then
-					packet.Height = originalChassis.Height
-				end
+				updateChassisPacket(packet)
 			elseif packet.Type == 'Heli' and heliControls.height.Enabled then
 				packet.MaxHeight = 9e9
 			else
-				originalChassis = nil
+				updateChassisPacket(nil)
 			end
 		end
 		CarLoopThread = nil
@@ -1002,7 +1083,7 @@ end
 
 local function unhookHeli()
 	if not heliHooked or not originalHeliUpdate then return end
-	client.vclasses.Heli.Update = originalHeliUpdate
+                client.vclasses.Heli.Update = originalHeliUpdate
 	heliHooked = false
 end
 
@@ -1020,7 +1101,7 @@ end
 
 local function unhookVolt()
 	if not voltHooked or not originalVoltUpdate then return end
-	client.vclasses.Volt.Update = originalVoltUpdate
+                client.vclasses.Volt.Update = originalVoltUpdate
 	voltHooked = false
 end
 
@@ -1032,9 +1113,9 @@ local function updateMotorbikeConstant()
 		end
 		setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + bikeControls.speedSlider.Value)
 	elseif originalMotorbikeSpeedConstant then
-		setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
-		originalMotorbikeSpeedConstant = nil
-	end
+                setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
+                originalMotorbikeSpeedConstant = nil
+            end
 end
 
 local function updateTankConstant()
@@ -1046,9 +1127,9 @@ local function updateTankConstant()
 		end
 		setconstant(proto, 20, tankControls.speedSlider.Value)
 	elseif originalTankEngineConstant then
-		setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, originalTankEngineConstant)
-		originalTankEngineConstant = nil
-	end
+                setconstant(getproto(client.tankbinder._handleSeatedDriver, 4), 20, originalTankEngineConstant)
+                originalTankEngineConstant = nil
+            end
 end
 
 VehicleOverdrive = minigamesCategory:CreateModule({
@@ -1056,68 +1137,99 @@ VehicleOverdrive = minigamesCategory:CreateModule({
 	Function = function(callback)
 		if callback then
 			runCarLoop()
+			pulseChassisOverrides()
 			hookHeli()
 			hookVolt()
 			updateMotorbikeConstant()
 			updateTankConstant()
 		else
+			restoreChassisStats(lastChassisPacket)
+			currentChassisModel = nil
+			lastChassisPacket = nil
 			unhookHeli()
 			unhookVolt()
 			updateMotorbikeConstant()
 			updateTankConstant()
-		end
+        end
 	end,
 	Tooltip = 'Suite kecepatan kendaraan lengkap (mobil, heli, volt, motor, tank).'
 })
 
-carControls.engine = VehicleOverdrive:CreateToggle({Name = 'Car Engine Override'})
+carControls.engine = VehicleOverdrive:CreateToggle({
+	Name = 'Car Engine Override',
+	Function = function()
+		pulseChassisOverrides()
+	end
+})
 carControls.engineSlider = VehicleOverdrive:CreateSlider({
 	Name = 'Car Engine Speed',
-	Min = 1,
-	Max = 200,
-	Default = 10,
-	Function = function() end,
-	Suffix = 'x'
+    Min = 1,
+    Max = 200,
+    Default = 10,
+	Function = function()
+		if carControls.engine.Enabled then
+			pulseChassisOverrides()
+		end
+	end,
+    Suffix = 'x'
 })
-carControls.turn = VehicleOverdrive:CreateToggle({Name = 'Car Turn Override'})
+carControls.turn = VehicleOverdrive:CreateToggle({
+	Name = 'Car Turn Override',
+	Function = function()
+		pulseChassisOverrides()
+	end
+})
 carControls.turnSlider = VehicleOverdrive:CreateSlider({
-	Name = 'Car Turn Speed',
-	Min = 1,
-	Max = 5,
-	Default = 1,
-	Decimal = 1,
-	Function = function() end,
-	Suffix = 'x'
+    Name = 'Car Turn Speed',
+    Min = 1,
+    Max = 5,
+    Default = 1,
+    Decimal = 1,
+	Function = function()
+		if carControls.turn.Enabled then
+			pulseChassisOverrides()
+		end
+	end,
+    Suffix = 'x'
 })
-carControls.suspension = VehicleOverdrive:CreateToggle({Name = 'Car Suspension Override'})
+carControls.suspension = VehicleOverdrive:CreateToggle({
+	Name = 'Car Suspension Override',
+	Function = function()
+		pulseChassisOverrides()
+	end
+})
 carControls.suspensionSlider = VehicleOverdrive:CreateSlider({
 	Name = 'Suspension Height',
 	Min = 1,
 	Max = 200,
 	Default = 10,
-	Function = function() end
+	Function = function()
+		if carControls.suspension.Enabled then
+			pulseChassisOverrides()
+		end
+	end
 })
 
 heliControls.speed = VehicleOverdrive:CreateToggle({Name = 'Heli Speed Override'})
 heliControls.forward = VehicleOverdrive:CreateSlider({
 	Name = 'Heli Forward Speed %',
 	Min = 10,
-	Max = 500,
-	Default = 100,
+    Max = 500,
+    Default = 100,
 	Function = function() end
 })
 heliControls.vertical = VehicleOverdrive:CreateSlider({
 	Name = 'Heli Vertical Speed %',
 	Min = 10,
-	Max = 300,
-	Default = 100,
+    Max = 300,
+    Default = 100,
 	Function = function() end
 })
 heliControls.turn = VehicleOverdrive:CreateSlider({
 	Name = 'Heli Turn Speed %',
 	Min = 10,
-	Max = 500,
-	Default = 100,
+    Max = 500,
+    Default = 100,
 	Function = function() end
 })
 heliControls.height = VehicleOverdrive:CreateToggle({Name = 'Heli Infinite Height'})
@@ -1135,7 +1247,7 @@ voltControls.speedSlider = VehicleOverdrive:CreateSlider({
 	Min = 0,
 	Max = 25,
 	Default = 0,
-	Function = function() end,
+    Function = function() end,
 	Suffix = 'x'
 })
 
@@ -1147,13 +1259,13 @@ bikeControls.speed = VehicleOverdrive:CreateToggle({
 })
 bikeControls.speedSlider = VehicleOverdrive:CreateSlider({
 	Name = 'Motorbike Multiplier',
-	Min = 0,
-	Max = 100,
-	Default = 0,
+    Min = 0,
+    Max = 100,
+    Default = 0,
 	Function = function()
 		updateMotorbikeConstant()
 	end,
-	Suffix = 'x'
+    Suffix = 'x'
 })
 
 tankControls.speed = VehicleOverdrive:CreateToggle({
@@ -1163,14 +1275,14 @@ tankControls.speed = VehicleOverdrive:CreateToggle({
 	end
 })
 tankControls.speedSlider = VehicleOverdrive:CreateSlider({
-	Name = 'Tank Engine Speed',
-	Min = 1,
-	Max = 500,
-	Default = 10,
+    Name = 'Tank Engine Speed',
+    Min = 1,
+    Max = 500,
+    Default = 10,
 	Function = function()
 		updateTankConstant()
 	end,
-	Suffix = 'x'
+    Suffix = 'x'
 })
 
 -- Vehicle Tweaks module (car-specific QoL controls)
