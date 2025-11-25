@@ -1050,14 +1050,14 @@ local function pulseChassisOverrides()
 	if chassisPulseActive then return end
 	chassisPulseActive = true
 	task.spawn(function()
-		local iterations = 0
-		while inVehicle and VehicleOverdrive and VehicleOverdrive.Enabled and iterations < 120 do
+	local iterations = 0
+	while inVehicle and VehicleOverdrive and VehicleOverdrive.Enabled and iterations < 120 do
 			local ok, packet = pcall(getVehiclePacket)
 			if ok and packet then
 				updateChassisPacket(packet)
 			end
 			task.wait(0.03)
-			iterations += 1
+		iterations = iterations + 1
 		end
 		chassisPulseActive = false
 	end)
@@ -1179,6 +1179,26 @@ VehicleOverdrive = minigamesCategory:CreateModule({
 	end,
 	Tooltip = 'Suite kecepatan kendaraan lengkap (mobil, heli, volt, motor, tank).'
 })
+
+do
+	local vehicleUtils = jb.VehicleController
+	if vehicleUtils and vehicleUtils.OnVehicleEntered and vehicleUtils.OnVehicleExited then
+		vehicleUtils.OnVehicleEntered:Connect(function(packet)
+			inVehicle = true
+			if packet then
+				updateChassisPacket(packet)
+				if VehicleOverdrive and VehicleOverdrive.Enabled then
+					pulseChassisOverrides()
+				end
+			end
+		end)
+
+		vehicleUtils.OnVehicleExited:Connect(function()
+			inVehicle = false
+			updateChassisPacket(nil)
+		end)
+	end
+end
 
 carControls.engine = VehicleOverdrive:CreateToggle({
 	Name = 'Car Engine Override',
