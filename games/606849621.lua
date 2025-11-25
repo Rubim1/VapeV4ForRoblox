@@ -926,6 +926,7 @@ local lastChassisPacket
 local originalChassisStats
 local inVehicle = false
 local chassisPulseActive = false
+local autoReseatCooling = false
 local carControls = {}
 local heliControls = {}
 local voltControls = {}
@@ -978,6 +979,29 @@ if lplr.Character then
 	bindSeatListener(lplr.Character)
 end
 lplr.CharacterAdded:Connect(bindSeatListener)
+
+local function triggerAutoReseat()
+	if autoReseatCooling or not inVehicle then return end
+	local character = lplr.Character
+	local humanoid = character and character:FindFirstChildOfClass('Humanoid')
+	local seat = humanoid and humanoid.SeatPart
+	if not humanoid or not seat then return end
+
+	autoReseatCooling = true
+	humanoid.Sit = false
+
+	task.delay(0.05, function()
+		if humanoid.Parent and seat.Parent then
+			pcall(function()
+				seat:Sit(humanoid)
+			end)
+		end
+	end)
+
+	task.delay(0.5, function()
+		autoReseatCooling = false
+	end)
+end
 
 local function updateChassisPacket(packet)
 	if not packet or packet.Type ~= 'Chassis' then
@@ -1138,6 +1162,7 @@ VehicleOverdrive = minigamesCategory:CreateModule({
 		if callback then
 			runCarLoop()
 			pulseChassisOverrides()
+			triggerAutoReseat()
 			hookHeli()
 			hookVolt()
 			updateMotorbikeConstant()
@@ -1159,6 +1184,7 @@ carControls.engine = VehicleOverdrive:CreateToggle({
 	Name = 'Car Engine Override',
 	Function = function()
 		pulseChassisOverrides()
+		triggerAutoReseat()
 	end
 })
 carControls.engineSlider = VehicleOverdrive:CreateSlider({
@@ -1169,6 +1195,7 @@ carControls.engineSlider = VehicleOverdrive:CreateSlider({
 	Function = function()
 		if carControls.engine.Enabled then
 			pulseChassisOverrides()
+			triggerAutoReseat()
 		end
 	end,
     Suffix = 'x'
@@ -1177,6 +1204,7 @@ carControls.turn = VehicleOverdrive:CreateToggle({
 	Name = 'Car Turn Override',
 	Function = function()
 		pulseChassisOverrides()
+		triggerAutoReseat()
 	end
 })
 carControls.turnSlider = VehicleOverdrive:CreateSlider({
@@ -1188,6 +1216,7 @@ carControls.turnSlider = VehicleOverdrive:CreateSlider({
 	Function = function()
 		if carControls.turn.Enabled then
 			pulseChassisOverrides()
+			triggerAutoReseat()
 		end
 	end,
     Suffix = 'x'
@@ -1196,6 +1225,7 @@ carControls.suspension = VehicleOverdrive:CreateToggle({
 	Name = 'Car Suspension Override',
 	Function = function()
 		pulseChassisOverrides()
+		triggerAutoReseat()
 	end
 })
 carControls.suspensionSlider = VehicleOverdrive:CreateSlider({
@@ -1206,6 +1236,7 @@ carControls.suspensionSlider = VehicleOverdrive:CreateSlider({
 	Function = function()
 		if carControls.suspension.Enabled then
 			pulseChassisOverrides()
+			triggerAutoReseat()
 		end
 	end
 })
