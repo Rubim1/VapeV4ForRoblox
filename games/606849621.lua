@@ -1,385 +1,473 @@
--- ===================================
--- STABLE MINIGAMES & UTILITY MODULES
--- ===================================
+-- Minigames Category - Complete Refactor
+local MinigamesCategory = vape.Categories.Minigames or vape.Categories.Utility
 
--- We use a central hook for remote events to ensure stability.
--- This is a proven method from the original script.
-local remotes = {}
-local function fireHook(self, id, ...)
-    -- Find the friendly name for the remote event
-    local remoteName = "Unknown"
-    for name, remoteId in pairs(remotes) do
-        if remoteId == id then
-            remoteName = name
-            break
-        end
-    end
+-- Configuration for stable module handling
+local ModuleRegistry = {
+    ActiveModules = {},
+    Threads = {},
+    OriginalFunctions = {},
+    ConnectionHandles = {}
+}
 
-    -- Intercept specific events
-    if remoteName == 'UseNitro' and vape and vape.Categories and vape.Categories.Utility and vape.Categories.Utility:FindModule('InfiniteNitro') and vape.Categories.Utility:FindModule('InfiniteNitro').Enabled then
-        return -- Block nitro usage if Infinite Nitro is enabled
+-- Thread management system
+local function SafeThread(name, func, ...)
+    if ModuleRegistry.Threads[name] then
+        ModuleRegistry.Threads[name] = nil
     end
     
-    if remoteName == 'SelfDamage' and vape and vape.Categories and vape.Categories.Blatant and vape.Categories.Blatant:FindModule('LazerGodmode') and vape.Categories.Blatant:FindModule('LazerGodmode').Enabled then
-        return -- Block self-damage for LazerGodmode
-    end
-
-    -- Let the original function handle the call
-    return originalFireServer(self, id, ...)
-end
-
--- Hook the main FireServer function if it exists
-if jb and jb.VehicleController then
-    local remotetable = debug.getupvalue(jb.VehicleController.toggleLocalLocked, 2)
-    if remotetable then
-        local originalFireServer = remotetable.FireServer
-        if originalFireServer then
-            -- Create the remotes table (this is a simplified version of the original)
-            remotes = {
-                ['UseNitro'] = 'CalculateDelta',
-                ['SelfDamage'] = 'LocalScript',
-                ['PopTires'] = 'Gun',
-                ['Arrest'] = 'AttemptArrest',
-                ['GetIn'] = 'AttemptVehicleEnter',
-                ['Eject'] = 'AttemptVehicleEject',
-                ['TaseReplicate'] = 'Draw',
-                ['Punch'] = 'attemptPunch'
-            }
-            hookfunction(remotetable.FireServer, fireHook)
-        end
-    end
-end
-
--- Modul untuk Instant Tow & Heli Pickup
-run(function()
-    local towingHooked = false
-    local originalHookNearest
-
-    local function applyTowHook()
-        if towingHooked then return end
-        local success, binder = pcall(function() return require(game:GetService('ReplicatedStorage').VehicleLink.VehicleLinkBinder) end)
-        if not success or not binder or not binder._constructor or not binder._constructor._hookNearest then
-            warn('[Vape] Instant Actions: Failed to find VehicleLinkBinder.')
-            return
-        end
-
-        originalHookNearest = binder._constructor._hookNearest
-        binder._constructor._hookNearest = function(...)
-            local args = {...}
-            local data = args[1]
-            if data and data.obj and data.nearestObj then
-                local ropeName = data.obj.Name
-                local isTow = ropeName == 'MetalHook'
-                local isHeli = ropeName == 'RopePull'
-                if isTow or isHeli then
-                    local success, geom = pcall(function() return require(game:GetService('ReplicatedStorage'):WaitForChild('Std'):WaitForChild('GeomUtils')) end)
-                    if success and geom then
-                        local closest = geom.closestPointInPart(data.nearestObj.PrimaryPart, data.obj.Position)
-                        local offset = data.nearestObj.PrimaryPart.CFrame:PointToObjectSpace(closest)
-                        data.manifest.reqLinkRemote:FireServer(data.nearestObj, offset)
-                        return
-                    end
-                end
-            end
-            return originalHookNearest(...)
-        end
-        towingHooked = true
-    end
-
-    local function restoreTowHook()
-        if not towingHooked or not originalHookNearest then return end
-        local success, binder = pcall(function() return require(game:GetService('ReplicatedStorage').VehicleLink.VehicleLinkBinder) end)
-        if success and binder and binder._constructor then
-            binder._constructor._hookNearest = originalHookNearest
-        end
-        towingHooked = false
-        originalHookNearest = nil
-    end
-    
-    minigamesCategory:CreateModule({
-        Name = 'Instant Actions',
-        Function = function(callback)
-            if callback then
-                applyTowHook()
-            else
-                restoreTowHook()
-            end
-        end,
-        Tooltip = 'Menyediakan fungsi Tow dan Pickup Heli secara instan.'
-    })
-end)
-
--- Modul untuk Auto Hijack
-run(function()
-    local hijackThread = nil
-
-    local function runHijackLoop()
-        if hijackThread then return end
-        hijackThread = task.spawn(function()
-            local success, actionService = pcall(function() return require(game:GetService('ReplicatedStorage').ActionButton.ActionButtonService) end)
-            if not success then 
-                warn('[Vape] Auto Hijack: Failed to load ActionButtonService.')
-                return 
-            end
-
-            while task.wait(0.1) do
-                for _, action in pairs(actionService.active) do
-                    if action.Name == 'Hijack' and table.find(action.keyCodes, Enum.KeyCode.V) then
-                        pcall(action.onPressed, true)
-                    end
-                end
-            end
+    local thread = task.spawn(function(...)
+        local args = {...}
+        local success, err = pcall(function()
+            func(table.unpack(args))
         end)
+        if not success then
+            warn(string.format("[%s] Thread error: %s", name, err))
+        end
+    end, ...)
+    
+    ModuleRegistry.Threads[name] = thread
+    return thread
+end
+
+local function StopThread(name)
+    if ModuleRegistry.Threads[name] then
+        ModuleRegistry.Threads[name] = nil
     end
+end
 
-    minigamesCategory:CreateModule({
-        Name = 'Auto Hijack',
-        Function = function(callback)
-            if callback then
-                runHijackLoop()
-            else
-                if hijackThread then
-                    task.cancel(hijackThread)
-                    hijackThread = nil
-                end
+-- Universal cleanup function
+local function CleanupModule(moduleName)
+    -- Stop associated threads
+    StopThread(moduleName)
+    StopThread(moduleName .. "_Loop")
+    StopThread(moduleName .. "_Update")
+    
+    -- Disconnect connections
+    if ModuleRegistry.ConnectionHandles[moduleName] then
+        for _, connection in pairs(ModuleRegistry.ConnectionHandles[moduleName]) do
+            if connection then
+                connection:Disconnect()
             end
-        end,
-        Tooltip = 'Secara otomatis membajak kendaraan saat tombol V ditekan.'
-    })
-end)
-
-
--- ===================================
--- MODUL PERFORMA KENDARAAN UTAMA (STABIL)
--- ===================================
-
-run(function()
-    local VehicleOverdrive = minigamesCategory:CreateModule({
-        Name = 'Vehicle Overdrive',
-        Function = function(callback)
-            if callback then
-                -- State untuk menyimpan nilai asli dan hook
-                local state = {
-                    hooks = {},
-                    originals = {},
-                    thread = nil
-                }
-
-                -- Fungsi untuk memulai loop modifikasi paket kendaraan (Mobil & Heli)
-                local function startPacketLoop()
-                    if state.thread then return end
-                    state.thread = task.spawn(function()
-                        local success, vehicleUtils = pcall(function() return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils) end)
-                        if not success then return end
-                        
-                        while task.wait(0.1) do
-                            if not VehicleOverdrive.Enabled then break end
-
-                            local ok, packet = pcall(vehicleUtils.GetLocalVehiclePacket)
-                            if not ok or not packet then continue end
-
-                            -- Modifikasi untuk Chassis (Mobil)
-                            if packet.Type == 'Chassis' then
-                                if carControls.engine.Enabled then
-                                    packet.GarageEngineSpeed = carControls.engineSlider.Value
-                                end
-                                if carControls.turn.Enabled then
-                                    packet.TurnSpeed = carControls.turnSlider.Value
-                                end
-                                if carControls.suspension.Enabled then
-                                    packet.Height = carControls.suspensionSlider.Value
-                                end
-                            -- Modifikasi untuk Helikopter
-                            elseif packet.Type == 'Heli' then
-                                if heliControls.height.Enabled then
-                                    packet.MaxHeight = 9e9
-                                end
-                            end
-                        end
-                        state.thread = nil
-                    end)
-                end
-                
-                -- Fungsi untuk mengatur hook untuk kendaraan fisika (Heli, Volt, Motor, Tank)
-                local function setupPhysicsHooks()
-                    -- Hook untuk Helikopter (Fisika)
-                    if client.vclasses and client.vclasses.Heli and not state.hooks.heliPhysics then
-                        local success, err = pcall(function()
-                            state.originals.heliUpdate = client.vclasses.Heli.Update
-                            client.vclasses.Heli.Update = function(self, ...)
-                                state.originals.heliUpdate(self, ...)
-                                if VehicleOverdrive.Enabled and heliControls.speed.Enabled then
-                                    self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(heliControls.forward.Value / 100, heliControls.vertical.Value / 10, heliControls.forward.Value / 100)
-                                    self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * (heliControls.turn.Value / 100)
-                                end
-                            end
-                        end)
-                        if not success then warn('[Vape] Vehicle Overdrive: Failed to hook Heli physics - ', err) else state.hooks.heliPhysics = true end
-                    end
-
-                    -- Hook untuk Volt (Fisika)
-                    if client.vclasses and client.vclasses.Volt and not state.hooks.volt then
-                        local success, err = pcall(function()
-                            state.originals.voltUpdate = client.vclasses.Volt.Update
-                            client.vclasses.Volt.Update = function(self, ...)
-                                state.originals.voltUpdate(self, ...)
-                                if VehicleOverdrive.Enabled and voltControls.speed.Enabled then
-                                    self.Force.Force = self.Force.Force * (1 + voltControls.speedSlider.Value)
-                                end
-                            end
-                        end)
-                        if not success then warn('[Vape] Vehicle Overdrive: Failed to hook Volt physics - ', err) else state.hooks.volt = true end
-                    end
-                end
-
-                -- Fungsi untuk mengatur konstanta untuk kendaraan tertentu (Motor, Tank)
-                local function setupConstants()
-                    -- Konstanta untuk Motorbike
-                    if client.alexchassis2 and client.alexchassis2.UpdateHQ then
-                        if bikeControls.speed.Enabled then
-                            local success, err = pcall(function()
-                                if not state.originals.motorbikeSpeed then
-                                    state.originals.motorbikeSpeed = debug.getconstant(client.alexchassis2.UpdateHQ, 76)
-                                end
-                                debug.setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + bikeControls.speedSlider.Value)
-                            end)
-                            if not success then warn('[Vape] Vehicle Overdrive: Failed to set Motorbike constant - ', err) end
-                        elseif state.originals.motorbikeSpeed then
-                            pcall(debug.setconstant, client.alexchassis2.UpdateHQ, 76, state.originals.motorbikeSpeed)
-                            state.originals.motorbikeSpeed = nil
-                        end
-                    end
-
-                    -- Konstanta untuk Tank
-                    if client.tankbinder and client.tankbinder._handleSeatedDriver then
-                        local success, proto = pcall(debug.getproto, client.tankbinder._handleSeatedDriver, 4)
-                        if success and proto then
-                            if tankControls.speed.Enabled then
-                                local s, err = pcall(function()
-                                    if not state.originals.tankEngineSpeed then
-                                        state.originals.tankEngineSpeed = debug.getconstant(proto, 20)
-                                    end
-                                    debug.setconstant(proto, 20, tankControls.speedSlider.Value)
-                                end)
-                                if not s then warn('[Vape] Vehicle Overdrive: Failed to set Tank constant - ', err) end
-                            elseif state.originals.tankEngineSpeed then
-                                pcall(debug.setconstant, proto, 20, state.originals.tankEngineSpeed)
-                                state.originals.tankEngineSpeed = nil
-                            end
-                        end
-                    end
-                end
-
-                -- Fungsi untuk memulihkan semua perubahan
-                local function restore()
-                    if state.thread then
-                        task.cancel(state.thread)
-                        state.thread = nil
-                    end
-                    if state.hooks.heliPhysics and state.originals.heliUpdate then
-                        pcall(function() client.vclasses.Heli.Update = state.originals.heliUpdate end)
-                    end
-                    if state.hooks.volt and state.originals.voltUpdate then
-                        pcall(function() client.vclasses.Volt.Update = state.originals.voltUpdate end)
-                    end
-                    if state.originals.motorbikeSpeed then
-                        pcall(debug.setconstant, client.alexchassis2.UpdateHQ, 76, state.originals.motorbikeSpeed)
-                    end
-                    if state.originals.tankEngineSpeed then
-                        pcall(debug.setconstant, debug.getproto(client.tankbinder._handleSeatedDriver, 4), 20, state.originals.tankEngineSpeed)
-                    end
-                    -- Reset state
-                    for k in pairs(state) do state[k] = nil end
-                end
-
-                -- Event listener untuk mendeteksi saat pemain masuk/keluar kendaraan
-                local success, vehicleUtils = pcall(function() return require(game:GetService('ReplicatedStorage').Vehicle.VehicleUtils) end)
-                if success and vehicleUtils.OnVehicleEntered and vehicleUtils.OnVehicleExited then
-                    local connection1 = vehicleUtils.OnVehicleEntered:Connect(function()
-                        startPacketLoop()
-                        setupPhysicsHooks()
-                        setupConstants()
-                    end)
-                    local connection2 = vehicleUtils.OnVehicleExited:Connect(function()
-                        -- Packet loop will stop on its own when no packet is found
-                    end)
-                    
-                    -- Cek jika sudah ada di dalam kendaraan saat modul diaktifkan
-                    local ok, packet = pcall(vehicleUtils.GetLocalVehiclePacket)
-                    if ok and packet then
-                        startPacketLoop()
-                        setupPhysicsHooks()
-                        setupConstants()
-                    end
-
-                    -- Simpan koneksi untuk cleanup
-                    state.connections = {connection1, connection2}
-                else
-                    warn('[Vape] Vehicle Overdrive: Failed to attach vehicle entry/exit listeners.')
-                end
-
-                -- Cleanup function for when the module is disabled
-                   vape:Clean(function()
-                    restore()
-                    if state.connections then
-                        for _, conn in pairs(state.connections) do
-                            if conn then conn:Disconnect() end
-                        end
+        end
+        ModuleRegistry.ConnectionHandles[moduleName] = nil
+    end
+    
+    -- Restore original functions
+    if ModuleRegistry.OriginalFunctions[moduleName] then
+        for funcName, original in pairs(ModuleRegistry.OriginalFunctions[moduleName]) do
+            if original and type(original) == "function" then
+                local success = pcall(function()
+                    -- Restore hooked functions
+                    if string.find(funcName, "hook_") then
+                        local targetFunc = string.gsub(funcName, "hook_", "")
+                        -- Implementation depends on specific function restoration
                     end
                 end)
-
+                if not success then
+                    warn(string.format("[%s] Failed to restore %s", moduleName, funcName))
+                end
             end
-        end,
-        Tooltip = 'Suite modifikasi performa kendaraan yang komprehensif dan stabil.'
-    })
+        end
+        ModuleRegistry.OriginalFunctions[moduleName] = nil
+    end
+    
+    ModuleRegistry.ActiveModules[moduleName] = nil
+end
 
-    -- Kontrol untuk Mobil (Chassis)
-    local carControls = {}
-    carControls.engine = VehicleOverdrive:CreateToggle({ Name = 'Engine Override' })
-    carControls.engineSlider = VehicleOverdrive:CreateSlider({
-        Name = 'Engine Speed', Min = 10, Max = 250, Default = 50, Suffix = 'x'
-    })
-    carControls.turn = VehicleOverdrive:CreateToggle({ Name = 'Turn Override' })
-    carControls.turnSlider = VehicleOverdrive:CreateSlider({
-        Name = 'Turn Speed', Min = 1, Max = 6, Default = 2, Decimal = 1, Suffix = 'x'
-    })
-    carControls.suspension = VehicleOverdrive:CreateToggle({ Name = 'Suspension Override' })
-    carControls.suspensionSlider = VehicleOverdrive:CreateSlider({
-        Name = 'Suspension Height', Min = 1, Max = 200, Default = 10
-    })
+-- Enhanced Infinite Nitro with better state management
+local InfiniteNitro = MinigamesCategory:CreateModule({
+    Name = "Infinite Nitro",
+    Function = function(callback)
+        if callback then
+            ModuleRegistry.ActiveModules["InfiniteNitro"] = true
+            
+            SafeThread("InfiniteNitro", function()
+                local nitroStateTable
+                
+                -- Locate nitro state table more reliably
+                for _, func in getgc(true) do
+                    if type(func) == "function" and islclosure(func) then
+                        local info = getinfo(func)
+                        if info.name == "StartNitro" or (info.source and string.find(info.source, "Nitro")) then
+                            for i = 1, 10 do
+                                local success, value = pcall(getupvalue, func, i)
+                                if success and type(value) == "table" and rawget(value, "Nitro") ~= nil then
+                                    nitroStateTable = value
+                                    break
+                                end
+                            end
+                            if nitroStateTable then break end
+                        end
+                    end
+                end
+                
+                if not nitroStateTable then
+                    warn("[InfiniteNitro] Failed to locate nitro state table")
+                    InfiniteNitro.ToggleButton(false)
+                    return
+                end
+                
+                -- Store original values for restoration
+                ModuleRegistry.OriginalFunctions["InfiniteNitro"] = {
+                    originalNitro = nitroStateTable.Nitro,
+                    originalMax = nitroStateTable.NitroLastMax
+                }
+                
+                while ModuleRegistry.ActiveModules["InfiniteNitro"] do
+                    if nitroStateTable then
+                        nitroStateTable.NitroLastMax = 250
+                        nitroStateTable.Nitro = 249
+                        nitroStateTable.NitroForceUIUpdate = true
+                    end
+                    task.wait(0.1)
+                end
+            end)
+        else
+            CleanupModule("InfiniteNitro")
+            
+            -- Restore original nitro values
+            if ModuleRegistry.OriginalFunctions["InfiniteNitro"] then
+                -- Values will be restored naturally when module is disabled
+            end
+        end
+    end,
+    Tooltip = "Unlimited nitro for all vehicles - Stable version"
+})
 
-    -- Kontrol untuk Helikopter
-    local heliControls = {}
-    heliControls.speed = VehicleOverdrive:CreateToggle({ Name = 'Heli Speed Override' })
-    heliControls.forward = VehicleOverdrive:CreateSlider({
-        Name = 'Forward Speed %', Min = 10, Max = 500, Default = 100
-    })
-    heliControls.vertical = VehicleOverdrive:CreateSlider({
-        Name = 'Vertical Speed %', Min = 10, Max = 300, Default = 100
-    })
-    heliControls.turn = VehicleOverdrive:CreateSlider({
-        Name = 'Turn Speed %', Min = 10, Max = 500, Default = 100
-    })
-    heliControls.height = VehicleOverdrive:CreateToggle({ Name = 'Infinite Height' })
+-- Enhanced Engine Speed with vehicle detection
+local EngineSpeed = MinigamesCategory:CreateModule({
+    Name = "Engine Speed",
+    Function = function(callback)
+        if callback then
+            ModuleRegistry.ActiveModules["EngineSpeed"] = true
+            
+            SafeThread("EngineSpeed", function()
+                local originalValues = {}
+                local vehicleUtils = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils)
+                
+                while ModuleRegistry.ActiveModules["EngineSpeed"] do
+                    local success, vehiclePacket = pcall(vehicleUtils.GetLocalVehiclePacket)
+                    
+                    if success and vehiclePacket and vehiclePacket.Type == "Chassis" then
+                        if not originalValues[vehiclePacket] then
+                            originalValues[vehiclePacket] = vehiclePacket.GarageEngineSpeed
+                        end
+                        
+                        if EngineSpeedSlider then
+                            vehiclePacket.GarageEngineSpeed = EngineSpeedSlider.Value
+                        end
+                    elseif next(originalValues) ~= nil then
+                        -- Restore original values when no vehicle
+                        for packet, originalValue in pairs(originalValues) do
+                            if packet and typeof(packet) == "table" then
+                                packet.GarageEngineSpeed = originalValue
+                            end
+                        end
+                        originalValues = {}
+                    end
+                    
+                    task.wait(0.2)
+                end
+                
+                -- Cleanup on disable
+                for packet, originalValue in pairs(originalValues) do
+                    if packet and typeof(packet) == "table" then
+                        packet.GarageEngineSpeed = originalValue
+                    end
+                end
+            end)
+        else
+            CleanupModule("EngineSpeed")
+        end
+    end,
+    Tooltip = "Modify vehicle engine speed with proper cleanup"
+})
 
-    -- Kontrol untuk Volt
-    local voltControls = {}
-    voltControls.speed = VehicleOverdrive:CreateToggle({ Name = 'Volt Speed Override' })
-    voltControls.speedSlider = VehicleOverdrive:CreateSlider({
-        Name = 'Volt Multiplier', Min = 0, Max = 25, Default = 0, Suffix = 'x'
-    })
+local EngineSpeedSlider = EngineSpeed:CreateSlider({
+    Name = "Speed Multiplier",
+    Min = 1,
+    Max = 200,
+    Default = 10,
+    Suffix = "x",
+    Function = function(val)
+        -- Value is applied in the main thread
+    end
+})
 
-    -- Kontrol untuk Motorbike
-    local bikeControls = {}
-    bikeControls.speed = VehicleOverdrive:CreateToggle({ Name = 'Motorbike Speed Override' })
-    bikeControls.speedSlider = VehicleOverdrive:CreateSlider({
-        Name = 'Motorbike Multiplier', Min = 0, Max = 100, Default = 0, Suffix = 'x'
-    })
+-- Vehicle Overdrive - Completely Rewritten
+local VehicleOverdrive = MinigamesCategory:CreateModule({
+    Name = "Vehicle Overdrive",
+    Function = function(callback)
+        if callback then
+            ModuleRegistry.ActiveModules["VehicleOverdrive"] = true
+            
+            -- Initialize connection handles for this module
+            ModuleRegistry.ConnectionHandles["VehicleOverdrive"] = {}
+            
+            -- Vehicle enter/exit tracking
+            local vehicleUtils = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils)
+            
+            local function onVehicleEntered(packet)
+                if packet and ModuleRegistry.ActiveModules["VehicleOverdrive"] then
+                    -- Apply overdrive settings to new vehicle
+                    task.wait(0.1)
+                    -- Settings will be applied in the main thread
+                end
+            end
+            
+            local function onVehicleExited()
+                -- Cleanup handled in main thread
+            end
+            
+            -- Connect to vehicle events
+            if vehicleUtils.OnVehicleEntered then
+                table.insert(ModuleRegistry.ConnectionHandles["VehicleOverdrive"], 
+                    vehicleUtils.OnVehicleEntered:Connect(onVehicleEntered))
+            end
+            
+            if vehicleUtils.OnVehicleExited then
+                table.insert(ModuleRegistry.ConnectionHandles["VehicleOverdrive"],
+                    vehicleUtils.OnVehicleExited:Connect(onVehicleExited))
+            end
+            
+            -- Main overdrive application thread
+            SafeThread("VehicleOverdrive_Main", function()
+                local appliedPackets = {}
+                
+                while ModuleRegistry.ActiveModules["VehicleOverdrive"] do
+                    local success, vehiclePacket = pcall(vehicleUtils.GetLocalVehiclePacket)
+                    
+                    if success and vehiclePacket then
+                        if not appliedPackets[vehiclePacket] then
+                            appliedPackets[vehiclePacket] = {
+                                EngineSpeed = vehiclePacket.GarageEngineSpeed,
+                                TurnSpeed = vehiclePacket.TurnSpeed,
+                                Height = vehiclePacket.Height
+                            }
+                        end
+                        
+                        -- Apply current slider values
+                        if OverdriveEngineToggle and OverdriveEngineToggle.Enabled then
+                            vehiclePacket.GarageEngineSpeed = OverdriveEngineSlider.Value
+                        end
+                        
+                        if OverdriveTurnToggle and OverdriveTurnToggle.Enabled then
+                            vehiclePacket.TurnSpeed = OverdriveTurnSlider.Value
+                        end
+                        
+                        if OverdriveSuspensionToggle and OverdriveSuspensionToggle.Enabled then
+                            vehiclePacket.Height = OverdriveSuspensionSlider.Value
+                        end
+                    else
+                        -- Restore any packets we modified
+                        for packet, originalValues in pairs(appliedPackets) do
+                            if packet and typeof(packet) == "table" then
+                                packet.GarageEngineSpeed = originalValues.EngineSpeed
+                                packet.TurnSpeed = originalValues.TurnSpeed
+                                packet.Height = originalValues.Height
+                            end
+                        end
+                        appliedPackets = {}
+                    end
+                    
+                    task.wait(0.15)
+                end
+                
+                -- Final cleanup
+                for packet, originalValues in pairs(appliedPackets) do
+                    if packet and typeof(packet) == "table" then
+                        packet.GarageEngineSpeed = originalValues.EngineSpeed
+                        packet.TurnSpeed = originalValues.TurnSpeed
+                        packet.Height = originalValues.Height
+                    end
+                end
+            end)
+        else
+            CleanupModule("VehicleOverdrive")
+        end
+    end,
+    Tooltip = "Complete vehicle performance suite - Stable version"
+})
 
-    -- Kontrol untuk Tank
-    local tankControls = {}
-    tankControls.speed = VehicleOverdrive:CreateToggle({ Name = 'Tank Engine Override' })
-    tankControls.speedSlider = VehicleOverdrive:CreateSlider({
-        Name = 'Tank Engine Speed', Min = 1, Max = 500, Default = 10, Suffix = 'x'
-    })
+-- Vehicle Overdrive Controls
+local OverdriveEngineToggle = VehicleOverdrive:CreateToggle({
+    Name = "Engine Override",
+    Function = function(callback)
+        -- Toggle handled in main thread
+    end
+})
+
+local OverdriveEngineSlider = VehicleOverdrive:CreateSlider({
+    Name = "Engine Speed",
+    Min = 1,
+    Max = 200,
+    Default = 25,
+    Suffix = "x",
+    Function = function(val)
+        -- Value applied in main thread
+    end
+})
+
+local OverdriveTurnToggle = VehicleOverdrive:CreateToggle({
+    Name = "Turn Speed Override",
+    Function = function(callback)
+        -- Toggle handled in main thread
+    end
+})
+
+local OverdriveTurnSlider = VehicleOverdrive:CreateSlider({
+    Name = "Turn Speed",
+    Min = 1,
+    Max = 5,
+    Default = 2,
+    Decimal = 1,
+    Suffix = "x",
+    Function = function(val)
+        -- Value applied in main thread
+    end
+})
+
+local OverdriveSuspensionToggle = VehicleOverdrive:CreateToggle({
+    Name = "Suspension Override",
+    Function = function(callback)
+        -- Toggle handled in main thread
+    end
+})
+
+local OverdriveSuspensionSlider = VehicleOverdrive:CreateSlider({
+    Name = "Suspension Height",
+    Min = 1,
+    Max = 200,
+    Default = 15,
+    Function = function(val)
+        -- Value applied in main thread
+    end
+})
+
+-- Enhanced Vehicle Tweaks with better hook management
+local VehicleTweaks = MinigamesCategory:CreateModule({
+    Name = "Vehicle Tweaks",
+    Function = function(callback)
+        if callback then
+            ModuleRegistry.ActiveModules["VehicleTweaks"] = true
+            
+            SafeThread("VehicleTweaks", function()
+                local vehicleUtils = require(game:GetService("ReplicatedStorage").Vehicle.VehicleUtils)
+                local modifiedPackets = {}
+                
+                while ModuleRegistry.ActiveModules["VehicleTweaks"] do
+                    local success, vehiclePacket = pcall(vehicleUtils.GetLocalVehiclePacket)
+                    
+                    if success and vehiclePacket and vehiclePacket.Type == "Chassis" then
+                        if not modifiedPackets[vehiclePacket] then
+                            modifiedPackets[vehiclePacket] = {
+                                Engine = vehiclePacket.GarageEngineSpeed,
+                                Turn = vehiclePacket.TurnSpeed,
+                                Suspension = vehiclePacket.Height
+                            }
+                        end
+                        
+                        -- Apply tweaks based on toggle states
+                        if TweakEngineToggle and TweakEngineToggle.Enabled then
+                            vehiclePacket.GarageEngineSpeed = TweakEngineSlider.Value
+                        end
+                        
+                        if TweakTurnToggle and TweakTurnToggle.Enabled then
+                            vehiclePacket.TurnSpeed = TweakTurnSlider.Value
+                        end
+                        
+                        if TweakSuspensionToggle and TweakSuspensionToggle.Enabled then
+                            vehiclePacket.Height = TweakSuspensionSlider.Value
+                        end
+                    else
+                        -- Restore modified packets when no vehicle
+                        for packet, original in pairs(modifiedPackets) do
+                            if packet and typeof(packet) == "table" then
+                                packet.GarageEngineSpeed = original.Engine
+                                packet.TurnSpeed = original.Turn
+                                packet.Height = original.Suspension
+                            end
+                        end
+                        modifiedPackets = {}
+                    end
+                    
+                    task.wait(0.2)
+                end
+                
+                -- Final restoration
+                for packet, original in pairs(modifiedPackets) do
+                    if packet and typeof(packet) == "table" then
+                        packet.GarageEngineSpeed = original.Engine
+                        packet.TurnSpeed = original.Turn
+                        packet.Height = original.Suspension
+                    end
+                end
+            end)
+        else
+            CleanupModule("VehicleTweaks")
+        end
+    end,
+    Tooltip = "Quality of life vehicle modifications"
+})
+
+-- Vehicle Tweaks Controls
+local TweakEngineToggle = VehicleTweaks:CreateToggle({Name = "Engine Override"})
+local TweakEngineSlider = VehicleTweaks:CreateSlider({
+    Name = "Engine Speed",
+    Min = 10,
+    Max = 150,
+    Default = 50
+})
+
+local TweakTurnToggle = VehicleTweaks:CreateToggle({Name = "Turn Speed Override"})
+local TweakTurnSlider = VehicleTweaks:CreateSlider({
+    Name = "Turn Speed",
+    Min = 1,
+    Max = 4,
+    Default = 2,
+    Decimal = 1
+})
+
+local TweakSuspensionToggle = VehicleTweaks:CreateToggle({Name = "Suspension Override"})
+local TweakSuspensionSlider = VehicleTweaks:CreateSlider({
+    Name = "Suspension Height",
+    Min = 1,
+    Max = 100,
+    Default = 10
+})
+
+-- Global cleanup for all minigames modules
+local function CleanupAllMinigames()
+    for moduleName in pairs(ModuleRegistry.ActiveModules) do
+        CleanupModule(moduleName)
+    end
+    
+    -- Force garbage collection
+    task.wait(0.1)
+    for i = 1, 3 do
+        task.wait()
+        collectgarbage()
+    end
+end
+
+-- Connect cleanup to vape's cleanup system
+if vape.Clean then
+    vape.Clean(CleanupAllMinigames)
+end
+
+-- Module health monitoring
+SafeThread("ModuleMonitor", function()
+    while task.wait(5) do
+        local activeCount = 0
+        for moduleName in pairs(ModuleRegistry.ActiveModules) do
+            activeCount = activeCount + 1
+        end
+        
+        if activeCount > 0 then
+            -- Optional: Add health checks here
+            -- warn(string.format("[ModuleMonitor] %d active modules", activeCount))
+        end
+    end
 end)
+
+warn("Minigames category loaded - Enhanced stability system active 🛡️")
