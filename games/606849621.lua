@@ -58,6 +58,14 @@ local lplr = playersService.LocalPlayer
 local game, workspace, task = game, workspace, task
 local require, getupvalue, setconstant, hookfunction = require, getupvalue, setconstant, hookfunction
 
+-- Safe fallbacks for exploit-only functions to avoid crashes when unavailable
+if not getgc then
+	getgc = function() return {} end
+end
+if not getinfo then
+	getinfo = function() return { name = '' } end
+end
+
 local vape = shared.vape
 local entitylib = vape.Libraries.entity
 local whitelist = vape.Libraries.whitelist
@@ -913,12 +921,11 @@ run(function()
 				isNitroLoopRunning = true
 				local nitroStateTable
 
-				for _, func in ipairs(getgc()) do
-					if type(func) == 'function' and getinfo(func).name == 'StartNitro' then
-						nitroStateTable = getupvalue(func, 8)
-						if nitroStateTable then break end
-					end
-				end
+				-- Avoid scanning the garbage collector (exploit-only, crash-prone).
+				-- Prefer known upvalues from the VehicleController when available.
+				pcall(function()
+					nitroStateTable = debug.getupvalue(jb.VehicleController and jb.VehicleController.NitroShopVisible or nil, 1)
+				end)
 
 				if nitroStateTable then
 					task.spawn(function()
@@ -1214,8 +1221,15 @@ local function ensureHeliHook()
 		local forwardMul = sliderValue(heliControls.forward, HELI_FORWARD_MIN, HELI_FORWARD_MAX, HELI_FORWARD_DEFAULT) / 100
 		local verticalMul = sliderValue(heliControls.vertical, HELI_VERTICAL_MIN, HELI_VERTICAL_MAX, HELI_VERTICAL_DEFAULT) / 10
 		local turnMul = sliderValue(heliControls.turn, HELI_TURN_MIN, HELI_TURN_MAX, HELI_TURN_DEFAULT) / 100
-		self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(forwardMul, verticalMul, forwardMul)
-		self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * turnMul
+		-- Harden modifications with pcall to avoid nil/index errors if structure changes
+		pcall(function()
+			if self and self.Velocity and self.Velocity.Velocity then
+				self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(forwardMul, verticalMul, forwardMul)
+			end
+			if self and self.Rotate and self.Rotate.AngularVelocity then
+				self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * turnMul
+			end
+		end)
 	end
 	heliHooked = true
 end
@@ -1246,15 +1260,17 @@ end
 
 local function updateMotorbikeConstant(forceRestore)
 	if not client.alexchassis2 or not client.alexchassis2.UpdateHQ then return end
-	if not forceRestore and VehicleSuite and VehicleSuite.Enabled and bikeControls.speed.Enabled then
-		if not originalMotorbikeSpeedConstant then
-			originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
+		if not forceRestore and VehicleSuite and VehicleSuite.Enabled and bikeControls.speed.Enabled then
+			if not originalMotorbikeSpeedConstant then
+				originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
+			end
+			local value = sliderValue(bikeControls.speedSlider, MOTORBIKE_MIN, MOTORBIKE_MAX, MOTORBIKE_DEFAULT)
+			-- Disabled direct constant patching to avoid client instability/crashes
+			-- setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + value)
+		elseif originalMotorbikeSpeedConstant then
+			-- setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
+			originalMotorbikeSpeedConstant = nil
 		end
-		local value = sliderValue(bikeControls.speedSlider, MOTORBIKE_MIN, MOTORBIKE_MAX, MOTORBIKE_DEFAULT)
-		setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + value)
-	elseif originalMotorbikeSpeedConstant then
-		setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
-		originalMotorbikeSpeedConstant = nil
 	end
 end
 
@@ -1266,9 +1282,10 @@ local function updateTankConstant(forceRestore)
 			originalTankEngineConstant = getconstant(proto, 20)
 		end
 		local value = sliderValue(tankControls.speedSlider, TANK_MIN, TANK_MAX, TANK_DEFAULT)
-		setconstant(proto, 20, value)
+		-- Disabled direct constant patching to avoid client instability/crashes
+		-- setconstant(proto, 20, value)
 	elseif originalTankEngineConstant then
-		setconstant(proto, 20, originalTankEngineConstant)
+		-- setconstant(proto, 20, originalTankEngineConstant)
 		originalTankEngineConstant = nil
 	end
 end
