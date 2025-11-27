@@ -58,14 +58,6 @@ local lplr = playersService.LocalPlayer
 local game, workspace, task = game, workspace, task
 local require, getupvalue, setconstant, hookfunction = require, getupvalue, setconstant, hookfunction
 
--- Safe fallbacks for exploit-only functions to avoid crashes when unavailable
-if not getgc then
-	getgc = function() return {} end
-end
-if not getinfo then
-	getinfo = function() return { name = '' } end
-end
-
 local vape = shared.vape
 local entitylib = vape.Libraries.entity
 local whitelist = vape.Libraries.whitelist
@@ -707,8 +699,6 @@ run(function()
 	local Range
 	local HandCheck
 	local TeamCheck
-	local lastPopped = {}
-	local POP_COOLDOWN = 1
 	
 	local function getEntitiesInVehicle(car)
 		local entities = {}
@@ -729,42 +719,27 @@ run(function()
 		return entities
 	end
 	
-	local function hasTires(car)
-		for _, part in car:GetDescendants() do
-			if part.Name == 'Tire' or part.Name == 'Wheel' then
-				return true
-			end
-		end
-		return false
-	end
-	
 	local function getVehiclesNear()
 		local allowed = {}
 	
 		if entitylib.isAlive then
 			local localPosition = entitylib.character.HumanoidRootPart.Position
 			for _, car in collectionService:GetTagged('Vehicle') do
-				if not car or not car.Parent then continue end
-				if not car.PrimaryPart then continue end
-				if not hasTires(car) then continue end
-				if (car.PrimaryPart.Position - localPosition).Magnitude > Range.Value then continue end
-				
-				local now = tick()
-				if now - (lastPopped[car] or 0) < POP_COOLDOWN then continue end
-	
-				local entities = getEntitiesInVehicle(car)
-				local check = #entities > 0
-				if TeamCheck.Enabled then
-					for _, ent in entities do
-						if not ent.Targetable then 
-							check = false 
-							break 
+				if car.PrimaryPart and (car.PrimaryPart.Position - localPosition).Magnitude <= Range.Value then
+					local entities = getEntitiesInVehicle(car)
+					local check = #entities > 0
+					if TeamCheck.Enabled then
+						for _, ent in entities do
+							if not ent.Targetable then 
+								check = false 
+								break 
+							end
 						end
 					end
-				end
-				
-				if check then 
-					table.insert(allowed, car) 
+					
+					if check then 
+						table.insert(allowed, car) 
+					end
 				end
 			end
 		end
@@ -782,10 +757,7 @@ run(function()
 						if (not HandCheck.Enabled) or item and item.BulletEmitter then
 							for _, car in getVehiclesNear() do
 								if not AutoPop.Enabled then break end
-								pcall(function()
-									jb:FireServer('PopTires', car, 'Sniper')
-									lastPopped[car] = tick()
-								end)
+								jb:FireServer('PopTires', car, 'Sniper')
 								task.wait(0.1)
 							end
 						end
@@ -941,11 +913,12 @@ run(function()
 				isNitroLoopRunning = true
 				local nitroStateTable
 
-				-- Avoid scanning the garbage collector (exploit-only, crash-prone).
-				-- Prefer known upvalues from the VehicleController when available.
-				pcall(function()
-					nitroStateTable = debug.getupvalue(jb.VehicleController and jb.VehicleController.NitroShopVisible or nil, 1)
-				end)
+				for _, func in ipairs(getgc()) do
+					if type(func) == 'function' and getinfo(func).name == 'StartNitro' then
+						nitroStateTable = getupvalue(func, 8)
+						if nitroStateTable then break end
+					end
+				end
 
 				if nitroStateTable then
 					task.spawn(function()
@@ -974,8 +947,6 @@ local suiteState = {
 	originals = {},
 	inVehicle = false,
 	lastPacket = nil,
-	currentPacket = nil,
-	currentModel = nil,
 	monitorThread = nil,
 	charConn = nil,
 	seatConn = nil,
@@ -997,13 +968,6 @@ local function sliderValue(slider, min, max, default)
 		return math.clamp(value, min, max)
 	end
 	return value
-end
-
-local function getSeatedModel()
-	local character = lplr.Character
-	local humanoid = character and character:FindFirstChildOfClass('Humanoid')
-	local seat = humanoid and humanoid.SeatPart
-	return seat and seat.Parent or nil
 end
 
 local CAR_ENGINE_MIN, CAR_ENGINE_MAX, CAR_ENGINE_DEFAULT = 1, 200, 10
@@ -1051,13 +1015,10 @@ local function restoreSnapshot(packet)
 end
 
 local function clearSnapshots()
-	local packet = suiteState.currentPacket or suiteState.lastPacket
-	if packet then
-		restoreSnapshot(packet)
+	if suiteState.lastPacket then
+		restoreSnapshot(suiteState.lastPacket)
 	end
 	suiteState.lastPacket = nil
-	suiteState.currentPacket = nil
-	suiteState.currentModel = nil
 	table.clear(suiteState.originals)
 end
 
@@ -1094,29 +1055,16 @@ local function applyHeliOverrides(packet)
 	end
 end
 
-local function refreshVehiclePacket(forceRestore)
+local function refreshVehiclePacket()
 	if not VehicleSuite or not VehicleSuite.Enabled then return end
 	local packet = getVehiclePacket()
-	local seatedModel = getSeatedModel()
-	if not packet or not packet.Model then
-		if forceRestore then
-			clearSnapshots()
-		else
-			suiteState.inVehicle = false
-			suiteState.currentPacket = nil
-		end
-		return
-	end
-
-	local targetModel = seatedModel or suiteState.currentModel
-	if targetModel and packet.Model ~= targetModel then
+	if not packet then
+		suiteState.inVehicle = false
 		return
 	end
 
 	suiteState.inVehicle = true
 	suiteState.lastPacket = packet
-	suiteState.currentPacket = packet
-	suiteState.currentModel = packet.Model
 
 	if packet.Type == 'Chassis' then
 		applyCarOverrides(packet)
@@ -1145,13 +1093,9 @@ local function bindSeatListener(character)
 	end
 	local humanoid = character:FindFirstChildOfClass('Humanoid') or character:WaitForChild('Humanoid', 5)
 	if not humanoid then return end
-	suiteState.seatConn = humanoid.Seated:Connect(function(isSeated, seat)
-		if isSeated then
-			suiteState.inVehicle = true
-			suiteState.currentModel = seat and seat.Parent or getSeatedModel()
-			refreshVehiclePacket(true)
-		else
-			suiteState.inVehicle = false
+	suiteState.seatConn = humanoid.Seated:Connect(function(isSeated)
+		suiteState.inVehicle = isSeated
+		if not isSeated then
 			clearSnapshots()
 		end
 	end)
@@ -1184,9 +1128,7 @@ local function ensureVehicleSignals()
 		suiteState.vehicleEnteredConn = vehicleUtils.OnVehicleEntered:Connect(function(packet)
 			suiteState.inVehicle = true
 			suiteState.lastPacket = packet
-			suiteState.currentPacket = packet
-			suiteState.currentModel = packet and packet.Model or getSeatedModel()
-			refreshVehiclePacket(true)
+			refreshVehiclePacket()
 		end)
 	end
 
@@ -1241,15 +1183,8 @@ local function ensureHeliHook()
 		local forwardMul = sliderValue(heliControls.forward, HELI_FORWARD_MIN, HELI_FORWARD_MAX, HELI_FORWARD_DEFAULT) / 100
 		local verticalMul = sliderValue(heliControls.vertical, HELI_VERTICAL_MIN, HELI_VERTICAL_MAX, HELI_VERTICAL_DEFAULT) / 10
 		local turnMul = sliderValue(heliControls.turn, HELI_TURN_MIN, HELI_TURN_MAX, HELI_TURN_DEFAULT) / 100
-		-- Harden modifications with pcall to avoid nil/index errors if structure changes
-		pcall(function()
-			if self and self.Velocity and self.Velocity.Velocity then
-				self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(forwardMul, verticalMul, forwardMul)
-			end
-			if self and self.Rotate and self.Rotate.AngularVelocity then
-				self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * turnMul
-			end
-		end)
+		self.Velocity.Velocity = self.Velocity.Velocity * Vector3.new(forwardMul, verticalMul, forwardMul)
+		self.Rotate.AngularVelocity = self.Rotate.AngularVelocity * turnMul
 	end
 	heliHooked = true
 end
@@ -1280,17 +1215,15 @@ end
 
 local function updateMotorbikeConstant(forceRestore)
 	if not client.alexchassis2 or not client.alexchassis2.UpdateHQ then return end
-		if not forceRestore and VehicleSuite and VehicleSuite.Enabled and bikeControls.speed.Enabled then
-			if not originalMotorbikeSpeedConstant then
-				originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
-			end
-			local value = sliderValue(bikeControls.speedSlider, MOTORBIKE_MIN, MOTORBIKE_MAX, MOTORBIKE_DEFAULT)
-			-- Disabled direct constant patching to avoid client instability/crashes
-			-- setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + value)
-		elseif originalMotorbikeSpeedConstant then
-			-- setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
-			originalMotorbikeSpeedConstant = nil
+	if not forceRestore and VehicleSuite and VehicleSuite.Enabled and bikeControls.speed.Enabled then
+		if not originalMotorbikeSpeedConstant then
+			originalMotorbikeSpeedConstant = getconstant(client.alexchassis2.UpdateHQ, 76)
 		end
+		local value = sliderValue(bikeControls.speedSlider, MOTORBIKE_MIN, MOTORBIKE_MAX, MOTORBIKE_DEFAULT)
+		setconstant(client.alexchassis2.UpdateHQ, 76, 1.2 + value)
+	elseif originalMotorbikeSpeedConstant then
+		setconstant(client.alexchassis2.UpdateHQ, 76, originalMotorbikeSpeedConstant)
+		originalMotorbikeSpeedConstant = nil
 	end
 end
 
@@ -1302,10 +1235,9 @@ local function updateTankConstant(forceRestore)
 			originalTankEngineConstant = getconstant(proto, 20)
 		end
 		local value = sliderValue(tankControls.speedSlider, TANK_MIN, TANK_MAX, TANK_DEFAULT)
-		-- Disabled direct constant patching to avoid client instability/crashes
-		-- setconstant(proto, 20, value)
+		setconstant(proto, 20, value)
 	elseif originalTankEngineConstant then
-		-- setconstant(proto, 20, originalTankEngineConstant)
+		setconstant(proto, 20, originalTankEngineConstant)
 		originalTankEngineConstant = nil
 	end
 end
@@ -1375,7 +1307,7 @@ end
 
 local function reapplyCarStats(withReseat)
 	if not (VehicleSuite and VehicleSuite.Enabled) then return end
-	refreshVehiclePacket(true)
+	refreshVehiclePacket()
 	if withReseat then
 		triggerAutoReseat()
 	end
@@ -1396,7 +1328,7 @@ VehicleSuite = minigamesCategory:CreateModule({
 			if utilityControls.hijack.Enabled then
 				runHijackLoop()
 			end
-		refreshVehiclePacket(true)
+			refreshVehiclePacket()
 		else
 			disconnectCharacterHooks()
 			disconnectVehicleSignals()
