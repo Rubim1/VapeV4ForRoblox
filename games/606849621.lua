@@ -947,6 +947,8 @@ local suiteState = {
 	originals = {},
 	inVehicle = false,
 	lastPacket = nil,
+	currentPacket = nil,
+	currentModel = nil,
 	monitorThread = nil,
 	charConn = nil,
 	seatConn = nil,
@@ -968,6 +970,13 @@ local function sliderValue(slider, min, max, default)
 		return math.clamp(value, min, max)
 	end
 	return value
+end
+
+local function getSeatedModel()
+	local character = lplr.Character
+	local humanoid = character and character:FindFirstChildOfClass('Humanoid')
+	local seat = humanoid and humanoid.SeatPart
+	return seat and seat.Parent or nil
 end
 
 local CAR_ENGINE_MIN, CAR_ENGINE_MAX, CAR_ENGINE_DEFAULT = 1, 200, 10
@@ -1015,10 +1024,13 @@ local function restoreSnapshot(packet)
 end
 
 local function clearSnapshots()
-	if suiteState.lastPacket then
-		restoreSnapshot(suiteState.lastPacket)
+	local packet = suiteState.currentPacket or suiteState.lastPacket
+	if packet then
+		restoreSnapshot(packet)
 	end
 	suiteState.lastPacket = nil
+	suiteState.currentPacket = nil
+	suiteState.currentModel = nil
 	table.clear(suiteState.originals)
 end
 
@@ -1055,16 +1067,29 @@ local function applyHeliOverrides(packet)
 	end
 end
 
-local function refreshVehiclePacket()
+local function refreshVehiclePacket(forceRestore)
 	if not VehicleSuite or not VehicleSuite.Enabled then return end
 	local packet = getVehiclePacket()
-	if not packet then
-		suiteState.inVehicle = false
+	local seatedModel = getSeatedModel()
+	if not packet or not packet.Model then
+		if forceRestore then
+			clearSnapshots()
+		else
+			suiteState.inVehicle = false
+			suiteState.currentPacket = nil
+		end
+		return
+	end
+
+	local targetModel = seatedModel or suiteState.currentModel
+	if targetModel and packet.Model ~= targetModel then
 		return
 	end
 
 	suiteState.inVehicle = true
 	suiteState.lastPacket = packet
+	suiteState.currentPacket = packet
+	suiteState.currentModel = packet.Model
 
 	if packet.Type == 'Chassis' then
 		applyCarOverrides(packet)
@@ -1093,9 +1118,13 @@ local function bindSeatListener(character)
 	end
 	local humanoid = character:FindFirstChildOfClass('Humanoid') or character:WaitForChild('Humanoid', 5)
 	if not humanoid then return end
-	suiteState.seatConn = humanoid.Seated:Connect(function(isSeated)
-		suiteState.inVehicle = isSeated
-		if not isSeated then
+	suiteState.seatConn = humanoid.Seated:Connect(function(isSeated, seat)
+		if isSeated then
+			suiteState.inVehicle = true
+			suiteState.currentModel = seat and seat.Parent or getSeatedModel()
+			refreshVehiclePacket(true)
+		else
+			suiteState.inVehicle = false
 			clearSnapshots()
 		end
 	end)
@@ -1128,7 +1157,9 @@ local function ensureVehicleSignals()
 		suiteState.vehicleEnteredConn = vehicleUtils.OnVehicleEntered:Connect(function(packet)
 			suiteState.inVehicle = true
 			suiteState.lastPacket = packet
-			refreshVehiclePacket()
+			suiteState.currentPacket = packet
+			suiteState.currentModel = packet and packet.Model or getSeatedModel()
+			refreshVehiclePacket(true)
 		end)
 	end
 
@@ -1307,7 +1338,7 @@ end
 
 local function reapplyCarStats(withReseat)
 	if not (VehicleSuite and VehicleSuite.Enabled) then return end
-	refreshVehiclePacket()
+	refreshVehiclePacket(true)
 	if withReseat then
 		triggerAutoReseat()
 	end
@@ -1328,7 +1359,7 @@ VehicleSuite = minigamesCategory:CreateModule({
 			if utilityControls.hijack.Enabled then
 				runHijackLoop()
 			end
-			refreshVehiclePacket()
+		refreshVehiclePacket(true)
 		else
 			disconnectCharacterHooks()
 			disconnectVehicleSignals()
