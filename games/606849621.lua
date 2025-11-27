@@ -707,6 +707,8 @@ run(function()
 	local Range
 	local HandCheck
 	local TeamCheck
+	local lastPopped = {}
+	local POP_COOLDOWN = 1
 	
 	local function getEntitiesInVehicle(car)
 		local entities = {}
@@ -727,27 +729,42 @@ run(function()
 		return entities
 	end
 	
+	local function hasTires(car)
+		for _, part in car:GetDescendants() do
+			if part.Name == 'Tire' or part.Name == 'Wheel' then
+				return true
+			end
+		end
+		return false
+	end
+	
 	local function getVehiclesNear()
 		local allowed = {}
 	
 		if entitylib.isAlive then
 			local localPosition = entitylib.character.HumanoidRootPart.Position
 			for _, car in collectionService:GetTagged('Vehicle') do
-				if car.PrimaryPart and (car.PrimaryPart.Position - localPosition).Magnitude <= Range.Value then
-					local entities = getEntitiesInVehicle(car)
-					local check = #entities > 0
-					if TeamCheck.Enabled then
-						for _, ent in entities do
-							if not ent.Targetable then 
-								check = false 
-								break 
-							end
+				if not car or not car.Parent then continue end
+				if not car.PrimaryPart then continue end
+				if not hasTires(car) then continue end
+				if (car.PrimaryPart.Position - localPosition).Magnitude > Range.Value then continue end
+				
+				local now = tick()
+				if now - (lastPopped[car] or 0) < POP_COOLDOWN then continue end
+	
+				local entities = getEntitiesInVehicle(car)
+				local check = #entities > 0
+				if TeamCheck.Enabled then
+					for _, ent in entities do
+						if not ent.Targetable then 
+							check = false 
+							break 
 						end
 					end
-					
-					if check then 
-						table.insert(allowed, car) 
-					end
+				end
+				
+				if check then 
+					table.insert(allowed, car) 
 				end
 			end
 		end
@@ -765,7 +782,10 @@ run(function()
 						if (not HandCheck.Enabled) or item and item.BulletEmitter then
 							for _, car in getVehiclesNear() do
 								if not AutoPop.Enabled then break end
-								jb:FireServer('PopTires', car, 'Sniper')
+								pcall(function()
+									jb:FireServer('PopTires', car, 'Sniper')
+									lastPopped[car] = tick()
+								end)
 								task.wait(0.1)
 							end
 						end
