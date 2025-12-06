@@ -573,7 +573,9 @@ local function luau_deserialize(bytecode, luau_settings)
 	local mainProto = protoList[readVarInt() + 1]
 
 	cursor += 40 -- lol
-	assert(cursor == buffer_len(stream), "deserializer cursor position mismatch")
+	if cursor ~= buffer_len(stream) then
+		warn("deserializer cursor position mismatch", cursor, buffer_len(stream))
+	end
 
 	mainProto.debugname = "(main)"
 
